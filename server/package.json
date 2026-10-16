@@ -15,7 +15,8 @@
     "test": "tsx --test test/*.test.ts",
     "diagnostics": "node dist/diagnostics/cli.js",
     "eval": "node dist/eval/cli.js",
-    "learning": "node dist/learning/cli.js"
+    "learning": "node dist/learning/cli.js",
+    "repair": "node dist/repair/cli.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
