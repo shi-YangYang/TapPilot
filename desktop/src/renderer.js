@@ -4,6 +4,10 @@ const api = window.tapPilot;
 let config = { hasKey: false };
 let selectedSerial = '';
 let selectedName = '';
+let mode = 'wireless';
+let selectedWirelessId = '';
+let wirelessState = { connected: false, closed: true, pairingAvailable: false };
+let pairingTimer;
 let running = false;
 let demo = false;
 let began = 0;
@@ -21,6 +25,7 @@ function page(name) {
     if (item.dataset.page === name) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
   }
   $('page-title').textContent = { task: '任务', model: '模型', device: '设备' }[name];
+  if (name === 'device' && !$('lan-address').value) void refreshLAN();
 }
 function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error', error); }
 async function call(operation, value) {
@@ -41,14 +46,47 @@ function showConfig(next) {
   $('api-key').placeholder = next.hasKey ? '已保存 · 留空保留原密钥' : '输入密钥（本机无鉴权服务可留空）';
   $('model-label').textContent = next.model ? `◈  ${next.model}` : '先配置一个模型';
   selectedSerial ||= next.serial || '';
+  setMode(next.mode || 'usb');
   updateDevice();
 }
 function updateDevice() {
-  $('connection-label').textContent = selectedSerial ? selectedName || selectedSerial : '尚未选择手机';
-  $('connection-dot').classList.toggle('muted', !selectedSerial);
-  $('device-title').textContent = selectedSerial ? selectedName || '已选择 Android 手机' : '连接你的 Android';
-  $('device-description').textContent = selectedSerial ? selectedSerial : '在设备页选择已授权的手机，即可开始执行任务。';
-  $('phone-state').textContent = selectedSerial ? '已选择' : '等待连接';
+  const connected = mode === 'wireless' ? wirelessState.connected && selectedWirelessId === wirelessState.deviceId : Boolean(selectedSerial);
+  const name = mode === 'wireless' ? wirelessState.deviceName : selectedName || selectedSerial;
+  $('connection-label').textContent = connected ? `${name || 'Android 手机'} · ${mode === 'wireless' ? '无线' : 'USB'}` : '尚未选择可用手机';
+  $('connection-dot').classList.toggle('muted', !connected);
+  $('device-title').textContent = connected ? name || '已选择 Android 手机' : '连接你的 Android';
+  $('device-description').textContent = connected ? mode === 'wireless' ? '已建立本次会话的加密连接' : selectedSerial : '在设备页选择已授权的手机，即可开始执行任务。';
+  $('phone-state').textContent = connected ? mode === 'wireless' ? '无线已连接' : 'USB 已选择' : '等待连接';
+}
+function setMode(value) {
+  mode = value;
+  $('wireless-panel').hidden = mode !== 'wireless'; $('usb-panel').hidden = mode !== 'usb';
+  $('mode-wireless').classList.toggle('active', mode === 'wireless'); $('mode-usb').classList.toggle('active', mode === 'usb');
+  updateDevice();
+}
+function connectionInput() { return mode === 'wireless' ? { mode, deviceId: selectedWirelessId } : { mode, serial: selectedSerial }; }
+function clearPairing() {
+  clearInterval(pairingTimer);
+  $('pairing-panel').hidden = true; $('pairing-qr').removeAttribute('src'); $('pairing-link').value = '';
+}
+function showWireless(state) {
+  const lost = wirelessState.connected && !state.connected;
+  wirelessState = state;
+  if (state.closed || selectedWirelessId && state.deviceId !== selectedWirelessId) selectedWirelessId = '';
+  if (!state.pairingAvailable) clearPairing();
+  $('start-pairing').disabled = running || !state.closed;
+  $('stop-pairing').disabled = state.closed;
+  $('lan-address').disabled = !state.closed || running;
+  $('wireless-badge').textContent = state.connected ? '已连接' : state.paired ? '等待重连' : state.closed ? '尚未开启' : state.pairingAvailable ? '等待扫码' : '已过期';
+  $('wireless-badge').className = `badge ${state.connected ? 'done' : state.closed ? '' : 'running'}`;
+  $('wireless-device').hidden = !state.paired;
+  $('wireless-device-name').textContent = state.deviceName || 'Android 手机';
+  $('wireless-device-status').textContent = state.connected ? '本次会话已加密连接' : '已断开，当前任务不会自动续跑';
+  $('select-wireless').disabled = !state.connected || running;
+  $('select-wireless').textContent = selectedWirelessId && selectedWirelessId === state.deviceId ? '已选择' : '选择此手机';
+  $('wireless-hint').textContent = state.closed ? '手机端需要开启无障碍服务并允许自动化，无需开发者模式。' : state.connected ? '保持手机解锁。取消任务会保留连接，退出客户端会使配对失效。' : state.paired ? '请在手机重新连接本次会话；恢复连接后重新开始任务。' : state.pairingAvailable ? '打开手机 TapPilot 的设备页扫码。若连接失败，请检查同一 Wi-Fi 与防火墙。' : '二维码已过期。先断开会话，再开始新的配对。';
+  if (lost && running && mode === 'wireless') notice('无线手机已断开，当前任务已取消，不会自动重放操作。', true);
+  updateDevice();
 }
 function setRunning(value) {
   running = value;
@@ -58,6 +96,8 @@ function setRunning(value) {
   $('save-model').disabled = value;
   $('save-device').disabled = value;
   $('task-input').disabled = value;
+  $('mode-wireless').disabled = value; $('mode-usb').disabled = value;
+  showWireless(wirelessState);
 }
 function metrics(value) {
   $('metric-total').textContent = (value.totalMs / 1000).toFixed(1);
@@ -101,6 +141,7 @@ api.onEvent(event => {
     if (event.metrics) metrics(event.metrics);
   } else if (event.type === 'idle') setRunning(false);
   else if (event.type === 'emergency_stopped') notice('手机已急停。恢复前请在手机 TapPilot 中手动允许自动化。');
+  else if (event.type === 'wireless_state') showWireless(event.state);
   if (['model_end', 'tool_end'].includes(event.type)) metrics({ totalMs: performance.now() - began, modelMs, toolMs, modelRequests, toolCalls });
 });
 
@@ -109,20 +150,20 @@ for (const element of document.querySelectorAll('[data-goto]')) element.addEvent
 for (const element of document.querySelectorAll('[data-prompt]')) element.addEventListener('click', () => { if (!running) { $('task-input').value = element.dataset.prompt; $('task-input').focus(); } });
 $('run-button').addEventListener('click', async () => {
   if (!config.model) { page('model'); notice('先保存模型地址、模型名称和 API Key。'); return; }
-  if (!selectedSerial) { page('device'); notice('先选择用于本次任务的手机。'); return; }
+  if (mode === 'wireless' ? !wirelessState.connected || !selectedWirelessId : !selectedSerial) { page('device'); notice('先选择用于本次任务的手机。'); return; }
   $('run-button').disabled = true;
-  const result = await call('run', { task: $('task-input').value, serial: selectedSerial });
+  const result = await call('run', { task: $('task-input').value, ...connectionInput() });
   if (!result) $('run-button').disabled = false;
 });
 $('demo-button').addEventListener('click', async () => { $('demo-button').disabled = true; if (!await call('demo')) $('demo-button').disabled = false; });
 $('cancel-button').addEventListener('click', async () => { if (await call('cancel')) notice('正在取消任务，已发出的动作可能已经完成。'); });
 $('emergency-button').addEventListener('click', async () => {
   $('emergency-button').disabled = true;
-  const result = await call('emergencyStop', { serial: selectedSerial });
+  const result = await call('emergencyStop', connectionInput());
   if (result?.demo) notice('演示已停止，没有操作真实手机。');
   $('emergency-button').disabled = false;
 });
-function configInput() { return { baseUrl: $('base-url').value, model: $('model-name').value, apiKey: $('api-key').value, clearKey: $('clear-key').checked, adbPath: $('adb-path').value, serial: selectedSerial }; }
+function configInput() { return { baseUrl: $('base-url').value, model: $('model-name').value, apiKey: $('api-key').value, clearKey: $('clear-key').checked, adbPath: $('adb-path').value, serial: selectedSerial, mode }; }
 async function save() { const result = await call('saveConfig', configInput()); $('api-key').value = ''; if (result) { showConfig(result); notice('配置已保存到本机。'); } return result; }
 $('model-form').addEventListener('submit', async event => { event.preventDefault(); await save(); });
 $('save-device').addEventListener('click', save);
@@ -148,8 +189,38 @@ $('refresh-devices').addEventListener('click', async () => {
     const text = document.createElement('div'); const name = document.createElement('strong'); name.textContent = device.model?.replaceAll('_', ' ') || 'Android 手机';
     const detail = document.createElement('small'); detail.textContent = `${device.serial} · ${device.state === 'unauthorized' ? '请在手机上授权 USB 调试' : available ? 'USB 已连接' : device.state}`;
     text.append(name, detail); label.append(radio, text); $('device-list').append(label);
-    radio.addEventListener('change', () => { selectedSerial = device.serial; selectedName = name.textContent; updateDevice(); notice('已选择设备。可以回到任务页开始执行。'); });
+    radio.addEventListener('change', () => { if (running) return; selectedSerial = device.serial; selectedName = name.textContent; updateDevice(); notice('已选择设备。可以回到任务页开始执行。'); });
   }
 });
 
-void (async () => { const state = await call('state'); if (!state) return; showConfig(state.config); $('version').textContent = `TapPilot ${state.version}`; setRunning(state.running); if (state.startupError) notice(state.startupError, true); })();
+async function refreshLAN() {
+  const addresses = await call('wirelessInterfaces');
+  if (!addresses) return;
+  const previous = $('lan-address').value; $('lan-address').replaceChildren();
+  for (const item of addresses) { const option = document.createElement('option'); option.value = item.address; option.textContent = `${item.address} · ${item.name}`; $('lan-address').append(option); }
+  if (addresses.some(item => item.address === previous)) $('lan-address').value = previous;
+  $('lan-hint').textContent = addresses.length ? '选择手机能够访问的网卡地址，仅在该地址接受加密连接。' : '未发现局域网地址，请连接 Wi-Fi 后刷新。';
+}
+$('refresh-lan').addEventListener('click', refreshLAN);
+$('mode-wireless').addEventListener('click', () => { if (!running) { setMode('wireless'); void refreshLAN(); } });
+$('mode-usb').addEventListener('click', () => { if (!running) setMode('usb'); });
+$('start-pairing').addEventListener('click', async () => {
+  $('start-pairing').disabled = true; notice('正在建立本次加密配对会话…');
+  const result = await call('wirelessStart', { host: $('lan-address').value });
+  if (!result) { $('start-pairing').disabled = false; return; }
+  showWireless(result.status); notice('配对已开始，请用手机 TapPilot 扫码或粘贴链接。');
+  if (result.status.pairingAvailable) {
+    $('pairing-qr').src = result.qrDataUrl; $('pairing-link').value = result.pairingUri; $('pairing-panel').hidden = false;
+    const countdown = () => {
+      const seconds = Math.max(0, Math.ceil((wirelessState.pairingExpiresAt - Date.now()) / 1000));
+      $('pairing-expiry').textContent = `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒后过期`;
+      if (!seconds) clearPairing();
+    };
+    countdown(); clearInterval(pairingTimer); pairingTimer = setInterval(countdown, 1000);
+  }
+});
+$('stop-pairing').addEventListener('click', async () => { $('stop-pairing').disabled = true; if (await call('wirelessClose')) { clearPairing(); notice('无线会话已关闭。再次连接需要重新配对。'); } });
+$('copy-pairing').addEventListener('click', async () => { if (await call('wirelessCopy')) notice('配对链接已复制，仅粘贴到你自己的手机 TapPilot。'); });
+$('select-wireless').addEventListener('click', () => { if (!running && wirelessState.connected) { selectedWirelessId = wirelessState.deviceId; setMode('wireless'); showWireless(wirelessState); notice('已选择无线手机，回到任务页即可开始。'); } });
+
+void (async () => { const state = await call('state'); if (!state) return; showConfig(state.config); showWireless(state.wireless); $('version').textContent = `TapPilot ${state.version}`; setRunning(state.running); if (state.startupError) notice(state.startupError, true); })();

@@ -48,12 +48,12 @@ export class Conversation {
     this.entries = [{ message: { role: "system", content: system }, snapshot: false }, { message: { role: "user", content: task }, snapshot: false }];
   }
   assistant(message: Message): void { this.entries.push({ message, snapshot: false }); }
-  result(id: string, value: Record<string, unknown>): { stateChanged: boolean } {
+  result(id: string, value: Record<string, unknown>, invalidateSnapshot = false): { stateChanged: boolean } {
     const content = JSON.stringify(value);
     if (Buffer.byteLength(content) > 96 * 1024) throw new RuntimeError("TOOL_RESULT_LIMIT", "界面数据过大，请使用更小的 UI 树或控件查找。动作结果不会自动重试。");
     const snapshot = hasSnapshot(value);
     let stateChanged = false;
-    if (snapshot) {
+    if (snapshot || invalidateSnapshot) {
       // Compare UI content itself, not an action/read wrapper or changing revision/timing fields.
       // A partial find_element result is not evidence that the screen changed.
       const observation = fullObservation(value);

@@ -1,6 +1,6 @@
 {
   "name": "tappilot-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Standalone desktop and Android agent runtime with an optional MCP accessibility bridge",
@@ -17,7 +17,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
     "ws": "8.22.0",
-    "zod": "3.25.76"
+    "zod": "3.25.76",
+    "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

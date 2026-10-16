@@ -2,11 +2,13 @@ import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { Adb, type Device } from "./adb.js";
 import { ApprovalQueue } from "./approvals.js";
 import { Bridge, type PhoneBridge } from "./bridge.js";
 import { AgentError, publicError } from "./errors.js";
 import { ToolController, toolSchemas, type ToolName } from "./tools.js";
+import type { WirelessHub } from "./wireless.js";
 
 type Json = Record<string, unknown>;
 export interface ClientTool { name: string; description: string; inputSchema: Json }
@@ -32,7 +34,9 @@ export const clientTools: ClientTool[] = [
     inputSchema: {
       type: "object", properties: { action: { type: "string", enum: actions }, arguments: { type: "object" }, waitMs: { type: "integer", minimum: 0, maximum: 1500, default: 350 } },
       required: ["action", "arguments"], additionalProperties: false,
-      oneOf: actions.map((action) => ({ properties: { action: { const: action }, arguments: toJsonSchemaCompat(toolSchemas[action]) }, required: ["action", "arguments"] })),
+      // These schemas are embedded below a new root; local $refs from shared Zod fields
+      // would otherwise point outside the action's arguments (e.g. swipe coordinates).
+      oneOf: actions.map((action) => ({ properties: { action: { const: action }, arguments: zodToJsonSchema(toolSchemas[action], { $refStrategy: "none" }) }, required: ["action", "arguments"] })),
     },
   },
 ];
@@ -157,4 +161,19 @@ export async function createUsbClient(options: { adbPath?: string; serial: strin
   const adb = new Adb({ executable: await adbExecutable(options.adbPath), serial: options.serial });
   await adb.select();
   return createPhoneClient(new Bridge(adb), adb);
+}
+
+/** Existing tool policies are transport-independent; this adapter never invokes the ADB binary. */
+export function createWirelessClient(hub: WirelessHub): PhoneClient {
+  const initial = hub.status();
+  if (!initial.connected || !initial.deviceId) throw new AgentError("WIRELESS_DISCONNECTED", "请先配对并连接手机，再开始任务。");
+  const id = initial.deviceId;
+  class WirelessDeviceInfo extends Adb {
+    override get selectedSerial() { return id; }
+    override async devices(): Promise<Device[]> {
+      const state = hub.status();
+      return [{ serial: id, state: state.connected && state.deviceId === id ? "device" : "offline", usb: false, emulator: false, model: state.deviceName }];
+    }
+  }
+  return createPhoneClient(hub.createBridge(), new WirelessDeviceInfo());
 }

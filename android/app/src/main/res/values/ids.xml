@@ -7,4 +7,8 @@
     <item name="model_save" type="id" />
     <item name="model_test" type="id" />
     <item name="task_status" type="id" />
+    <item name="wireless_pairing" type="id" />
+    <item name="wireless_scan" type="id" />
+    <item name="wireless_connect" type="id" />
+    <item name="wireless_status" type="id" />
 </resources>

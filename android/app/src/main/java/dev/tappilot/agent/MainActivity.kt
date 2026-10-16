@@ -23,6 +23,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.util.concurrent.Executors
+import com.google.zxing.integration.android.IntentIntegrator
 
 /** Protected local control surface: it cannot be read or operated through TapPilot tools. */
 class MainActivity : Activity() {
@@ -46,9 +47,14 @@ class MainActivity : Activity() {
     private lateinit var deviceStatus: TextView
     private lateinit var modelStatus: TextView
     private lateinit var start: Button
+    private lateinit var pairingInput: EditText
+    private lateinit var wirelessStatus: TextView
+    private lateinit var wirelessConnect: Button
+    private var waitingToConnect = false
     private var testing: ModelClient? = null
     private var waitingToStart = false
     private val observer: (TaskViewState) -> Unit = { renderState(it) }
+    private val wirelessObserver: (WirelessViewState) -> Unit = { renderWireless(it) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -120,14 +126,27 @@ class MainActivity : Activity() {
     }
     private fun buildDevicePage() = column().apply {
         addView(label("让手机准备好", 23f, ink, true))
-        addView(label("日常使用无需电脑、数据线或开发者模式。", 14f, muted).apply { setPadding(0, dp(8), 0, dp(20)) })
+        addView(label("手机独立运行，或通过 Wi-Fi 连接电脑。", 14f, muted).apply { setPadding(0, dp(8), 0, dp(20)) })
+        addView(card().apply {
+            addView(label("无线连接电脑", 18f, ink, true))
+            addView(label("手机与电脑连接同一局域网。在电脑端打开无线配对，再扫码或粘贴配对地址。", 12f, muted).apply { setPadding(0, dp(10), 0, dp(12)) })
+            wirelessStatus = label("尚未连接电脑", 13f, muted).apply { id = R.id.wireless_status }; addView(wirelessStatus)
+            addView(button("扫描电脑二维码", true, ::scanPairing).apply { id = R.id.wireless_scan }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(14) })
+            pairingInput = input("或粘贴 tappilot://pair?... 配对地址").apply { id = R.id.wireless_pairing; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }; addView(pairingInput)
+            wirelessConnect = button("连接 / 重新连接", false, ::connectWireless).apply { id = R.id.wireless_connect }
+            addView(wirelessConnect, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
+            addView(button("断开电脑", false) { WirelessService.disconnectActive() }, LinearLayout.LayoutParams(-1, dp(45)).apply { topMargin = dp(6) })
+            addView(label("配对只保留在内存；应用进程重启后需重新扫码。连接电脑期间，手机端任务暂停使用。密钥不会发送给模型。", 12f, muted).apply { setPadding(0, dp(12), 0, 0) })
+        })
         addView(card().apply {
             deviceStatus = label("", 15f, ink).apply { setPadding(0, 0, 0, dp(18)) }; addView(deviceStatus)
             addView(button("1  开启无障碍服务", true) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }, LinearLayout.LayoutParams(-1, dp(49)))
             addView(label("在系统设置中找到“TapPilot 手机自动化”，阅读权限说明并手动开启。若系统提示受限设置，请按系统提供的流程处理。", 12f, muted).apply { setPadding(0, dp(10), 0, dp(16)) })
             addView(button("2  允许自动化 / 恢复", false) {
-                getSharedPreferences("safety", MODE_PRIVATE).edit().putBoolean("stopped", false).commit()
-                AgentAccessibilityService.instance?.resumeLocally(); updateDeviceStatus()
+                safe {
+                    val service = AgentAccessibilityService.instance ?: throw AgentError("SERVICE_UNAVAILABLE", "请先开启无障碍服务，再允许自动化")
+                    service.resumeLocally(); updateDeviceStatus()
+                }
             }, LinearLayout.LayoutParams(-1, dp(49)))
             addView(button("3  允许任务通知", false) { requestNotifications() }, LinearLayout.LayoutParams(-1, dp(49)).apply { topMargin = dp(8) })
         })
@@ -135,25 +154,52 @@ class MainActivity : Activity() {
             addView(label("随时掌握控制权", 18f, ink, true))
             addView(label("任务进行时可从通知栏停止。紧急停止会同时禁止手机端及电脑端继续操作，只能由你在这里恢复。", 13f, muted).apply { setPadding(0, dp(10), 0, dp(16)) })
             addView(button("紧急停止所有自动化", false) {
-                getSharedPreferences("safety", MODE_PRIVATE).edit().putBoolean("stopped", true).commit()
-                AgentTaskService.cancelActive("已紧急停止")
-                AgentAccessibilityService.instance?.stopAutomation(); updateDeviceStatus()
+                safe { AgentAccessibilityService.latchEmergencyStop(this@MainActivity); updateDeviceStatus() }
             }.apply { setTextColor(Color.rgb(167, 56, 44)); background = rounded(Color.rgb(252, 235, 231), 12) }, LinearLayout.LayoutParams(-1, dp(49)))
         })
         addView(label("兼容电脑：原有 ADB / MCP 接口仍可使用。手机客户端直接调用原生控制服务，不依赖 Codex。", 12f, muted).apply { setPadding(dp(4), dp(4), dp(4), dp(20)) })
     }
     private fun startTask() = safe {
         if (TaskState.value.running) return@safe
+        if (WirelessState.value.connecting || WirelessState.value.connected) { selectTab(2); toast("请先断开电脑，再开始手机端任务"); return@safe }
         if (task.text.isBlank()) { toast("先写下你想完成的任务"); return@safe }
         if (SettingsStore(this).load() == null) { selectTab(1); toast("请先保存模型配置"); return@safe }
         if (AgentAccessibilityService.instance == null || getSharedPreferences("safety", MODE_PRIVATE).getBoolean("stopped", true)) {
             selectTab(2); toast("请先开启服务并允许自动化"); return@safe
         }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            waitingToStart = true; requestNotifications(); return@safe
+            waitingToStart = true; waitingToConnect = false; requestNotifications(); return@safe
         }
         startForegroundService(Intent(this, AgentTaskService::class.java).setAction(AgentTaskService.ACTION_START).putExtra("task", task.text.toString()))
         startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+    private fun scanPairing() = safe {
+        if (WirelessState.value.connecting || WirelessState.value.connected || TaskState.value.running) { toast("请先停止任务或断开连接，再扫描新的配对码"); return@safe }
+        IntentIntegrator(this).setCaptureActivity(SecureScanActivity::class.java).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+            .setPrompt("扫描 TapPilot 电脑端的无线配对二维码").setBeepEnabled(false).setBarcodeImageEnabled(false).setOrientationLocked(false).initiateScan()
+    }
+    private fun connectWireless() = safe {
+        if (WirelessState.value.connecting || WirelessState.value.connected) return@safe
+        if (TaskState.value.running || AutomationOwner.busy()) { toast("请先停止手机端任务"); return@safe }
+        val entered = pairingInput.text.toString()
+        if (entered.isNotBlank()) WirelessState.pairing = PairingInfo.parse(entered)
+        if (WirelessState.pairing == null) { toast("先扫描或粘贴电脑端配对地址"); return@safe }
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            waitingToConnect = true; waitingToStart = false; requestNotifications(); return@safe
+        }
+        startForegroundService(Intent(this, WirelessService::class.java).setAction(WirelessService.CONNECT))
+        pairingInput.setText("")
+    }
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        val result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data)
+        if (result != null) {
+            result.contents?.let { content -> safe { WirelessState.pairing = PairingInfo.parse(content); pairingInput.setText(""); WirelessState.publish(WirelessViewState(status = "配对码已读取，点击“连接”完成配对")); selectTab(2) } }
+        } else super.onActivityResult(requestCode, resultCode, data)
+    }
+    private fun renderWireless(state: WirelessViewState) {
+        if (!::wirelessStatus.isInitialized) return
+        wirelessStatus.text = state.status
+        wirelessConnect.isEnabled = !state.connecting && !state.connected
     }
     private fun requestNotifications() {
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10) else toast("此系统无需单独授予通知权限")
@@ -164,6 +210,11 @@ class MainActivity : Activity() {
             waitingToStart = false
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startTask()
             else toast("为便于从通知栏停止任务，请允许通知后再开始")
+        }
+        if (requestCode == 10 && waitingToConnect) {
+            waitingToConnect = false
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) connectWireless()
+            else toast("请允许通知，便于随时断开电脑连接")
         }
         updateDeviceStatus()
     }
@@ -204,8 +255,8 @@ class MainActivity : Activity() {
         tabs.forEachIndexed { i, b -> b.setTextColor(if (i == index) Color.WHITE else muted); b.background = rounded(if (i == index) green else Color.WHITE, 12) }
         updateDeviceStatus()
     }
-    override fun onStart() { super.onStart(); TaskState.observe(observer) }
-    override fun onStop() { TaskState.remove(observer); super.onStop() }
+    override fun onStart() { super.onStart(); TaskState.observe(observer); WirelessState.observe(wirelessObserver) }
+    override fun onStop() { TaskState.remove(observer); WirelessState.remove(wirelessObserver); super.onStop() }
     override fun onResume() { super.onResume(); updateDeviceStatus() }
     override fun onDestroy() { testing?.cancel(); worker.shutdownNow(); super.onDestroy() }
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {

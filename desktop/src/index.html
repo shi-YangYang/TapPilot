@@ -69,8 +69,22 @@
     </section>
 
     <section id="page-device" class="page" hidden>
-      <div class="page-heading"><div><div class="eyebrow">ONE PHONE. MANY POSSIBILITIES.</div><h1>让手机准备就绪。</h1><p>选择你的 Android 手机。任务执行期间不会切换到其他设备。</p></div><span class="heading-art">⌁</span></div>
-      <div class="settings-grid"><div><div class="card settings-card"><div class="card-header"><span class="section-label">USB 设备</span><button id="refresh-devices" class="secondary small">刷新设备</button></div><div id="device-list" class="device-list"><p class="subtle">点击刷新以查找已连接的手机。</p></div><label for="adb-path">ADB 路径 <span class="subtle">可选</span></label><input id="adb-path" type="text" placeholder="自动寻找 Android SDK 中的 adb" maxlength="4096"><p class="field-hint">USB 开发通道需要已安装 Android platform-tools。填写完整路径即可自定义。</p><button id="save-device" class="secondary">保存设备设置</button></div><div class="card connection-guide"><div class="section-label">首次连接</div><ol><li><span>1</span><div><strong>安装手机端 TapPilot</strong><p>打开 App，按引导开启无障碍服务。</p></div></li><li><span>2</span><div><strong>授权自动化与 USB 调试</strong><p>点击手机端“允许自动化 / 恢复”，并授权这台电脑。</p></div></li><li><span>3</span><div><strong>连接、刷新、选择</strong><p>保持手机解锁，在这里选择设备后开始任务。</p></div></li></ol></div></div><div class="settings-notes"><div class="note-number">控制权始终在你手中</div><h3>任务随时可以停止。</h3><p>取消会结束当前任务；紧急停止还会请求手机锁定自动化操作，直到你手动恢复。</p><div class="note-number">关于当前连接方式</div><h3>USB 是开发通道。</h3><p>这个桌面版本复用现有 USB 控制链路。手机独立客户端可以直接连接模型服务，在手机上运行任务。</p></div></div>
+      <div class="page-heading"><div><div class="eyebrow">ONE PHONE. MANY POSSIBILITIES.</div><h1>让手机准备就绪。</h1><p>同一局域网内扫码配对，告别数据线和 USB 调试。</p></div><span class="heading-art">⌁</span></div>
+      <div class="connection-tabs" role="group" aria-label="连接方式"><button id="mode-wireless" class="active">⌁ 无线连接 <span>推荐</span></button><button id="mode-usb">▯ USB 开发通道</button></div>
+      <div class="settings-grid"><div>
+        <div id="wireless-panel" class="card settings-card">
+          <div class="card-header"><span class="section-label">局域网配对</span><span id="wireless-badge" class="badge">尚未开启</span></div>
+          <p class="field-hint">电脑和手机连接同一个 Wi-Fi。只在点击开始后开放当前会话，退出客户端即失效。</p>
+          <label for="lan-address">电脑的局域网地址</label><div class="lan-picker"><select id="lan-address" aria-label="局域网地址"><option value="">请刷新网络地址</option></select><button id="refresh-lan" class="secondary small">刷新</button></div>
+          <p id="lan-hint" class="field-hint">选择手机能够访问的网卡地址。</p>
+          <div class="form-actions"><button id="start-pairing" class="primary">开始无线配对</button><button id="stop-pairing" class="secondary" disabled>断开会话</button></div>
+          <div id="pairing-panel" class="pairing-panel" hidden><img id="pairing-qr" width="260" height="260" alt="TapPilot 本次会话配对二维码"><strong>用手机 TapPilot 扫描二维码</strong><p id="pairing-expiry" class="field-hint"></p><button id="copy-pairing" class="text-button">复制配对链接 →</button><details><summary>手动输入链接</summary><textarea id="pairing-link" readonly aria-label="配对链接"></textarea></details><p class="pairing-private">二维码包含本次配对凭据，仅分享给你自己的手机。</p></div>
+          <div id="wireless-device" class="wireless-device" hidden><span class="wireless-device-icon">⌁</span><div><strong id="wireless-device-name"></strong><p id="wireless-device-status"></p></div><button id="select-wireless" class="secondary small">选择此手机</button></div>
+          <p id="wireless-hint" class="field-hint">手机端需要开启无障碍服务并允许自动化，无需开发者模式。</p>
+        </div>
+        <div id="usb-panel" class="card settings-card" hidden><div class="card-header"><span class="section-label">USB 设备</span><button id="refresh-devices" class="secondary small">刷新设备</button></div><div id="device-list" class="device-list"><p class="subtle">点击刷新以查找已连接的手机。</p></div><label for="adb-path">ADB 路径 <span class="subtle">可选</span></label><input id="adb-path" type="text" placeholder="自动寻找 Android SDK 中的 adb" maxlength="4096"><p class="field-hint">USB 开发通道需要已安装 Android platform-tools。填写完整路径即可自定义。</p><button id="save-device" class="secondary">保存设备设置</button></div>
+        <div class="card connection-guide"><div class="section-label">无线连接三步完成</div><ol><li><span>1</span><div><strong>打开手机端 TapPilot</strong><p>按引导开启无障碍服务，点击“允许自动化 / 恢复”。</p></div></li><li><span>2</span><div><strong>扫描二维码，连接电脑</strong><p>在手机“设备”页扫描，或粘贴配对链接。</p></div></li><li><span>3</span><div><strong>选择手机，开始任务</strong><p>保持手机解锁和连接，在电脑“任务”页输入需求。</p></div></li></ol></div>
+      </div><div class="settings-notes"><div class="note-number">无需数据线</div><h3>手机主动连接电脑。</h3><p>双方通过本次配对建立加密连接。配对二维码 5 分钟内有效，仅允许一台手机。</p><div class="note-number">控制权始终在你手中</div><h3>停止，不等模型回答。</h3><p>取消会结束任务并保留无线连接。急停会请求手机停止自动化，恢复须在手机端手动进行。</p><div class="note-number">会话结束后</div><h3>配对凭据不落盘。</h3><p>断开或退出后重新扫码。网络中断会结束当前任务，不会自动补做动作。USB 调试仅用于开发通道。</p></div></div>
     </section>
   </main>
 </body>

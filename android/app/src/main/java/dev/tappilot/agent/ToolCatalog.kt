@@ -44,6 +44,14 @@ internal object ToolCatalog {
         validateValue(args, schema, "arguments")
         if (name == "act_and_observe") validateAction(args.getString("action"), args.getJSONObject("arguments"))
     }
+    fun validateRpc(name: String, args: JSONObject) {
+        when {
+            name in actions -> validateAction(name, args)
+            name == "get_device_info" || name == "emergency_stop" -> validateValue(args, obj(emptyMap()), "arguments")
+            name == "wait_for_ui_change" -> validateValue(args, obj(mapOf("sinceRevision" to number(0, Int.MAX_VALUE), "timeoutMs" to number(1, 25000), "selector" to selector), listOf("sinceRevision")), "arguments")
+            else -> validate(name, args)
+        }
+    }
     fun validateAction(action: String, args: JSONObject) = validateValue(args, actions[action] ?: throw AgentError("UNKNOWN_TOOL", "不支持此动作"), "arguments")
     private fun validateValue(value: Any?, schema: JSONObject, path: String) {
         fun invalid(): Nothing = throw AgentError("INVALID_ARGUMENT", "$path 不符合工具参数格式")

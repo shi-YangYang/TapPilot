@@ -22,7 +22,8 @@ The user authorizes ordinary phone navigation for this task. In this version, se
 Never bypass a lock screen, CAPTCHA, biometrics, app protections, or an emergency stop. Never request passwords or verification codes through a tool. API keys are not available to you. Do not send screen contents to any destination except the configured model as necessary for this task.
 If no suitable accessible control exists, explain the limitation. A fresh observation supersedes all older snapshots.`;
 
-const TERMINAL_TOOL_ERRORS = new Set(["CONFIRMATION_REQUIRED", "MANUAL_ACTION_REQUIRED", "EMERGENCY_STOPPED", "AUTOMATION_STOPPED", "DEVICE_LOCKED", "SERVICE_UNAVAILABLE"]);
+const TRANSPORT_FAILURES = new Set(["BRIDGE_CLOSED", "BRIDGE_TIMEOUT", "WIRELESS_CLOSED", "WIRELESS_DISCONNECTED", "WIRELESS_PROTOCOL_ERROR", "WIRELESS_SERVER_ERROR", "WIRELESS_SESSION_CHANGED", "WIRELESS_TIMEOUT"]);
+const TERMINAL_TOOL_ERRORS = new Set(["CONFIRMATION_REQUIRED", "MANUAL_ACTION_REQUIRED", "EMERGENCY_STOPPED", "AUTOMATION_STOPPED", "DEVICE_LOCKED", "SERVICE_UNAVAILABLE", ...TRANSPORT_FAILURES]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -97,16 +98,19 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
       const result = await executeWithDeadline(options, call.function.name, args, signal).finally(() => { metrics.toolMs += Math.round(performance.now() - toolStarted); });
       signal.throwIfAborted();
       emit({ type: "tool_end", turn, toolName: call.function.name, durationMs: Math.round(performance.now() - toolStarted), ok: result.ok !== false });
-      const toolError = isRecord(result.error) && typeof result.error.code === "string" ? result.error.code : undefined;
-      if (result.ok === false && toolError && TERMINAL_TOOL_ERRORS.has(toolError)) {
+      const observationError = isRecord(result.result) && isRecord(result.result.observationError) ? result.result.observationError : undefined;
+      const toolError = isRecord(result.error) && typeof result.error.code === "string" ? result.error.code :
+        typeof observationError?.code === "string" ? observationError.code : undefined;
+      if (toolError && TERMINAL_TOOL_ERRORS.has(toolError)) {
         const message = toolError === "MANUAL_ACTION_REQUIRED" ? "本版发送消息、付款、下单和删除等操作需要你在手机上手工完成，已停止自动执行。" :
           toolError === "CONFIRMATION_REQUIRED" ? "工具层要求独立终端 approve CLI 批准当前单次操作；聊天或客户端消息不会解除此限制。请按服务提示处理后重新开始任务。" :
-            "手机权限或停止状态阻止继续，请检查手机后再开始任务。";
+            TRANSPORT_FAILURES.has(toolError) ? "手机连接已变化或请求超时，任务已停止。动作可能已经发生；请查看手机、重新连接后开始新任务。没有重放动作。" :
+              "手机权限或停止状态阻止继续，请检查手机后再开始任务。";
         throw new RuntimeError(toolError, message);
       }
       if (result.ok === true && ["get_ui_tree", "find_element", "get_current_app"].includes(call.function.name)) hasObservation = true;
-      if (result.ok === true && call.function.name === "act_and_observe" && isRecord(result.result) && result.result.observation && !result.result.observationError) hasObservation = true;
-      const update = conversation.result(call.id, result);
+      if (call.function.name === "act_and_observe") hasObservation = result.ok === true && isRecord(result.result) && Boolean(result.result.observation) && !result.result.observationError;
+      const update = conversation.result(call.id, result, call.function.name === "act_and_observe");
       if (update.stateChanged) repetitions.clear();
     };
     // The host already knows observation is the first step. Avoid spending a model round merely

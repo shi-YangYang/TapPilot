@@ -6,6 +6,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.app.KeyguardManager
 import android.content.Intent
+import android.content.Context
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
@@ -31,6 +32,20 @@ class AgentAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile var instance: AgentAccessibilityService? = null
             private set
+        private val safetyLock = Any()
+        /** An authenticated stop is durable independently of transport lifetime or main-loop cancellation. */
+        internal fun latchEmergencyStop(context: Context) {
+            val (service, persisted) = synchronized(safetyLock) {
+                instance?.stopped = true
+                val written = runCatching { context.getSharedPreferences("safety", Context.MODE_PRIVATE)
+                    .edit().putBoolean("stopped", true).commit() }.getOrDefault(false)
+                instance to written
+            }
+            service?.let { current -> synchronized(current.changes) { current.changes.notifyAll() } }
+            val cleanup = { AgentTaskService.cancelActive("已紧急停止"); service?.advanceRevision(); Unit }
+            if (Looper.myLooper() == Looper.getMainLooper()) cleanup() else (service?.main ?: Handler(Looper.getMainLooper())).post(cleanup)
+            if (!persisted) throw AgentError("STOP_PERSISTENCE_FAILED", "已停止当前自动化，但无法持久保存急停状态；请在手机确认，暂勿重启服务")
+        }
         private val selectorKeys = setOf("text", "textContains", "resourceId", "contentDescription", "className", "clickable", "scrollable", "editable", "enabled")
         private val booleanSelectors = setOf("clickable", "scrollable", "editable", "enabled")
         // Reserve space below 1 MiB for metadata and the RPC envelope (host frame cap: 2 MiB).
@@ -65,8 +80,10 @@ class AgentAccessibilityService : AccessibilityService() {
         hintPackage = null
         advanceRevision()
         connected = true
-        stopped = getSharedPreferences("safety", MODE_PRIVATE).getBoolean("stopped", true)
-        instance = this
+        synchronized(safetyLock) {
+            stopped = getSharedPreferences("safety", MODE_PRIVATE).getBoolean("stopped", true)
+            instance = this
+        }
         server?.close()
         server = try {
             RpcServer(this).also { it.start(); transportStatus = "ADB localabstract:tappilot" }
@@ -88,7 +105,7 @@ class AgentAccessibilityService : AccessibilityService() {
             event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED)
     }
 
-    override fun onInterrupt() { stopAutomation() }
+    override fun onInterrupt() { runCatching { stopAutomation() } }
 
     private fun disconnect() {
         connected = false
@@ -112,14 +129,21 @@ class AgentAccessibilityService : AccessibilityService() {
 
     internal fun stopAutomation() {
         stopped = true
-        AgentTaskService.cancelActive("已紧急停止")
-        getSharedPreferences("safety", MODE_PRIVATE).edit().putBoolean("stopped", true).commit()
-        advanceRevision()
+        latchEmergencyStop(this)
     }
 
     internal fun resumeLocally() {
         // Only called by MainActivity; no transport method or exported intent can resume.
-        stopped = false
+        synchronized(safetyLock) {
+            val preferences = getSharedPreferences("safety", MODE_PRIVATE)
+            if (!preferences.edit().putBoolean("stopped", false).commit()) {
+                // commit can update the in-process preference cache even when the disk write fails.
+                preferences.edit().putBoolean("stopped", true).apply()
+                stopped = true
+                throw AgentError("RESUME_PERSISTENCE_FAILED", "无法保存恢复状态，自动化仍保持停止")
+            }
+            stopped = false
+        }
         advanceRevision()
     }
 
@@ -129,15 +153,14 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     internal fun dispatch(method: String, params: JSONObject, canContinue: () -> Boolean = { true }): JSONObject {
+        if (method == "emergency_stop") {
+            stopAutomation()
+            return JSONObject().put("stopped", true).put("revision", revision)
+        }
         if (!canContinue()) throw AgentError("CANCELLED", "任务已停止")
         if (method == "act_and_observe") {
             if (!waitSlots.tryAcquire()) throw AgentError("BUSY", "At most two concurrent UI waits are supported", true)
             try { return actAndObserve(params, canContinue) } finally { waitSlots.release() }
-        }
-        // Latch immediately on the socket worker, before any already-queued main-loop action.
-        if (method == "emergency_stop") {
-            stopped = true
-            synchronized(changes) { changes.notifyAll() }
         }
         if (method == "wait_for_ui_change") {
             if (!waitSlots.tryAcquire()) throw AgentError("BUSY", "At most two concurrent UI waits are supported", true)
@@ -154,7 +177,6 @@ class AgentAccessibilityService : AccessibilityService() {
                     .put("serviceConnected", connected).put("stopped", stopped).put("revision", revision)
                     .put("locked", isLocked()).put("transport", "adb-localabstract")
                     .put("protocolVersion", 1).put("sessionId", session)
-                "emergency_stop" -> { stopAutomation(); JSONObject().put("stopped", true).put("revision", revision) }
                 "get_current_app" -> currentApp()
                 "get_ui_tree" -> { assertReady(); snapshotJson(capture(intParam(params, "maxNodes", 300, 1, 500), intParam(params, "maxDepth", 20, 1, 40))) }
                 "find_element" -> {

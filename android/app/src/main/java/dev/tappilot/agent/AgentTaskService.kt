@@ -42,6 +42,7 @@ class AgentTaskService : Service() {
         fun cancelActive(reason: String = "任务已停止") { active?.cancel(reason) }
     }
     private val worker = Executors.newSingleThreadExecutor()
+    private val owner = Any()
     private val main = Handler(Looper.getMainLooper())
     private var future: Future<*>? = null
     @Volatile private var runner: AgentRuntime? = null
@@ -57,8 +58,8 @@ class AgentTaskService : Service() {
             ACTION_STOP -> { cancel("任务已停止"); return START_NOT_STICKY }
             ACTION_EMERGENCY -> {
                 cancel("已紧急停止")
-                getSharedPreferences("safety", MODE_PRIVATE).edit().putBoolean("stopped", true).commit()
-                AgentAccessibilityService.instance?.stopAutomation()
+                try { AgentAccessibilityService.latchEmergencyStop(this) }
+                catch (error: AgentError) { TaskState.publish(TaskViewState(false, "急停保存失败", error.message, events)) }
                 return START_NOT_STICKY
             }
             ACTION_START -> {
@@ -66,6 +67,10 @@ class AgentTaskService : Service() {
                 val notification = notification("任务准备中")
                 if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
                 else startForeground(NOTIFICATION, notification)
+                if (!AutomationOwner.acquire(owner)) {
+                    TaskState.publish(TaskViewState(false, "任务未启动", "请先断开电脑无线连接，再开始手机端任务。"))
+                    stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); return START_NOT_STICKY
+                }
                 active = this
                 cancelled = false
                 val task = intent.getStringExtra("task").orEmpty()
@@ -130,6 +135,7 @@ class AgentTaskService : Service() {
         runner?.cancel()
         future?.cancel(true)
         worker.shutdownNow()
+        AutomationOwner.release(owner)
         if (active === this) active = null
         if (TaskState.value.running) TaskState.publish(TaskViewState(false, "任务服务已结束", "任务没有自动恢复，请检查手机后重新开始。", events))
         super.onDestroy()

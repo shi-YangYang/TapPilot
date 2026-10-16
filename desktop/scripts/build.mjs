@@ -3,7 +3,7 @@ import { copyFile, mkdir, access } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-for (const entry of ['runtime/index.js', 'client-tools.js']) {
+for (const entry of ['runtime/index.js', 'client-tools.js', 'wireless.js']) {
   try { await access(path.join(root, '../server/dist', entry)); }
   catch { throw new Error('请先在 server 目录运行 npm run build，再构建桌面客户端。'); }
 }

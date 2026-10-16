@@ -1,12 +1,15 @@
-import { app, BrowserWindow, ipcMain, Menu, safeStorage, session } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, Menu, safeStorage, session } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { access } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { runAgent, testModel, RuntimeError } from '../../server/dist/runtime/index.js';
-import { createUsbClient, listUsbDevices } from '../../server/dist/client-tools.js';
+import { createUsbClient, createWirelessClient, listUsbDevices } from '../../server/dist/client-tools.js';
+import { WirelessHub, listLANAddresses } from '../../server/dist/wireless.js';
+import QRCode from 'qrcode';
 import { ClientError, SettingsStore, taskInput, object, assertSender } from './settings.mjs';
 import { runDemo } from './demo.mjs';
+import { WirelessSession } from './wireless-session.mjs';
 
 app.setName('TapPilot');
 let window;
@@ -15,6 +18,8 @@ let active;
 let stopping = false;
 let modelTest;
 let startupError;
+let wireless;
+let savingConfig = false;
 const page = path.join(app.getAppPath(), 'dist', 'index.html');
 const pageUrl = pathToFileURL(page).href;
 const publicEvent = value => {
@@ -37,7 +42,11 @@ function safeMessage(error) {
     NO_DEVICE: '没有发现可用 USB 手机。请检查设备页的连接说明。',
     DEVICE_NOT_FOUND: '未找到选择的手机，请重新连接并刷新设备。',
     EMERGENCY_STOPPED: '手机处于急停状态，请在手机 TapPilot 中手动恢复。',
-    SERVICE_NOT_CONNECTED: '手机无障碍服务尚未连接，请在手机中开启 TapPilot。'
+    SERVICE_NOT_CONNECTED: '手机无障碍服务尚未连接，请在手机中开启 TapPilot。',
+    WIRELESS_DISCONNECTED: '无线手机已断开。请重新连接后开始新任务，旧动作不会自动重放。',
+    WIRELESS_TLS_SETUP_FAILED: '无法建立加密会话，请确认 macOS 系统 OpenSSL 可用。',
+    WIRELESS_LISTEN_FAILED: '无法监听所选地址，请刷新网络并检查端口或防火墙设置。',
+    WIRELESS_TIMEOUT: '无线请求超时，动作结果可能未知。请检查手机界面后再开始新任务。'
   };
   return messages[error?.code] || '操作未完成。请检查模型配置、手机连接及无障碍服务状态。';
 }
@@ -53,7 +62,7 @@ function handle(name, operation) {
   ipcMain.handle(`tappilot:${name}`, async (event, value) => {
     try {
       assertSender(event, window, pageUrl);
-      if (!['save-config', 'run', 'emergency-stop'].includes(name) && value !== undefined) throw new ClientError('INVALID_INPUT', '此请求不接受参数。');
+      if (!['save-config', 'run', 'emergency-stop', 'wireless-start'].includes(name) && value !== undefined) throw new ClientError('INVALID_INPUT', '此请求不接受参数。');
       return { ok: true, result: await operation(value) };
     }
     catch (error) { return { ok: false, error: { code: typeof error?.code === 'string' ? error.code.slice(0, 80) : 'CLIENT_ERROR', message: safeMessage(error) } }; }
@@ -69,8 +78,9 @@ async function begin(value, demo) {
   if (active || stopping) throw new ClientError('RUNNING', '已有任务正在执行或停止，请稍后再试。');
   const input = demo ? undefined : taskInput(value);
   const model = demo ? undefined : store.model();
+  if (input?.mode === 'wireless') wireless.forDevice(input.deviceId);
   const controller = new AbortController();
-  const run = { controller, client: undefined, demo };
+  const run = { controller, client: undefined, demo, target: input };
   active = run;
   // Acknowledge immediately; long-running work reports progress through one-way events.
   void (async () => {
@@ -80,7 +90,7 @@ async function begin(value, demo) {
       let result;
       if (demo) result = await runDemo(controller.signal, onEvent);
       else {
-        run.client = await createUsbClient({ adbPath: await adbPath(), serial: input.serial });
+        run.client = input.mode === 'wireless' ? createWirelessClient(wireless.forDevice(input.deviceId)) : await createUsbClient({ adbPath: await adbPath(), serial: input.serial });
         if (controller.signal.aborted) throw new ClientError('CANCELLED', '操作已取消。');
         result = await runAgent({ task: input.task, model, tools: run.client.tools, execute: (name, args, signal) => run.client.execute(name, args, signal), signal: controller.signal, onEvent, maxTurns: 24 });
       }
@@ -96,18 +106,19 @@ async function begin(value, demo) {
   return { started: true, demo };
 }
 async function emergency(value) {
-  object(value, ['serial']);
+  object(value, ['serial', 'mode', 'deviceId']);
   if (stopping) throw new ClientError('STOPPING', '正在请求急停。');
   const was = active;
   // Cancellation is local and immediate, even if phone stop cannot be confirmed.
   was?.controller.abort();
   if (was?.demo) return { phoneStopped: false, demo: true };
-  const { serial } = taskInput({ task: 'emergency-stop', serial: value.serial });
+  // During a task, stop its pinned target even if the device page selection has changed.
+  const target = was?.target ?? taskInput({ task: 'emergency-stop', ...value });
   stopping = true;
   let client;
   try {
     // Keep the stop request independent of the task session being closed after cancellation.
-    client = await createUsbClient({ adbPath: await adbPath(), serial });
+    client = target.mode === 'wireless' ? createWirelessClient(wireless.forDevice(target.deviceId)) : await createUsbClient({ adbPath: await adbPath(), serial: target.serial });
     const result = await client.execute('emergency_stop', {}, new AbortController().signal);
     if (result.ok === false) throw new ClientError('PHONE_STOP_UNCONFIRMED', '任务已取消，但未确认手机急停。请在手机点击急停或关闭无障碍服务。');
     send({ type: 'emergency_stopped' });
@@ -117,6 +128,12 @@ async function emergency(value) {
 }
 
 app.whenReady().then(async () => {
+  wireless = new WirelessSession({ startHub: options => WirelessHub.start(options), addresses: listLANAddresses,
+    qr: value => QRCode.toDataURL(value, { errorCorrectionLevel: 'M', margin: 3, width: 300, color: { dark: '#292538', light: '#fffefa' } }),
+    onState: state => {
+      if (active?.target?.mode === 'wireless' && (!state.connected || state.deviceId !== active.target.deviceId)) active.controller.abort();
+      send({ type: 'wireless_state', state });
+    } });
   store = new SettingsStore(app.getPath('userData'), {
     encrypt: async value => {
       if (!safeStorage.isEncryptionAvailable() || process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text') throw new ClientError('KEYCHAIN_UNAVAILABLE', '系统密钥存储不可用，无法安全保存 API Key。');
@@ -125,14 +142,25 @@ app.whenReady().then(async () => {
     decrypt: async value => (await safeStorage.decryptStringAsync(value)).result
   });
   try { await store.load(); } catch (error) { startupError = safeMessage(error); }
-  handle('state', () => ({ config: store.public(), running: Boolean(active), version: app.getVersion(), startupError }));
-  handle('save-config', value => { if (active) throw new ClientError('RUNNING', '请等待任务结束后修改模型设置。'); return store.save(value); });
+  handle('state', () => ({ config: store.public(), running: Boolean(active), version: app.getVersion(), startupError, wireless: wireless.status() }));
+  handle('save-config', async value => {
+    if (active || savingConfig) throw new ClientError('RUNNING', '请等待任务或配置保存结束。');
+    savingConfig = true;
+    try { return await store.save(value); } finally { savingConfig = false; }
+  });
   handle('test-model', async () => {
     if (active || modelTest) throw new ClientError('TEST_RUNNING', '请等待当前任务或模型测试结束。');
     const controller = new AbortController(); modelTest = controller;
     try { return await testModel(store.model(), controller.signal); } finally { modelTest = undefined; }
   });
   handle('devices', async () => (await listUsbDevices(await adbPath())).map(({ serial, state, usb, emulator, model }) => ({ serial, state, usb, emulator, model })));
+  handle('wireless-interfaces', () => wireless.interfaces());
+  handle('wireless-start', value => {
+    if (active || stopping) throw new ClientError('RUNNING', '请结束当前任务后配对手机。');
+    return wireless.start(value);
+  });
+  handle('wireless-close', async () => { if (active?.target?.mode === 'wireless') active.controller.abort(); await wireless.close(); return { closed: true }; });
+  handle('wireless-copy', () => { clipboard.writeText(wireless.pairingUri()); return { copied: true }; });
   handle('run', value => begin(value, false));
   handle('demo', () => begin(undefined, true));
   handle('cancel', () => { active?.controller.abort(); modelTest?.abort(); return { cancelled: true }; });
@@ -148,4 +176,4 @@ app.whenReady().then(async () => {
   await window.loadFile(page);
 });
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { active?.controller.abort(); modelTest?.abort(); void active?.client?.close(); });
+app.on('before-quit', () => { active?.controller.abort(); modelTest?.abort(); void active?.client?.close(); void wireless?.close(); });

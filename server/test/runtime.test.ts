@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import test from "node:test";
+import { clientTools } from "../src/client-tools.js";
 import { endpointFor, runAgent, testModel, type AgentTool, type ModelConfig } from "../src/runtime/index.js";
 
 type Body = { messages: Array<Record<string, unknown>>; tools?: unknown[]; model?: string };
@@ -50,7 +51,7 @@ test("a configured compatible model drives a real HTTP multi-turn tool loop, wit
       const history = body.messages.filter(message => message.role === "tool").map(message => JSON.parse(message.content as string));
       assert.equal(history[0].superseded, true);
       assert.equal(JSON.stringify(history).includes("old-screen-content"), false);
-      assert.equal(history[1].result.snapshotId, "s2");
+      assert.equal(history[1].result.observation.snapshotId, "s2");
       assert.match(body.messages[0]!.content as string, /untrusted DATA/);
       res.end(JSON.stringify(response("当前显示电池设置。")));
     }
@@ -58,11 +59,11 @@ test("a configured compatible model drives a real HTTP multi-turn tool loop, wit
   const events: Record<string, unknown>[] = [];
   const executed: string[] = [];
   try {
-    const result = await runAgent({ task: "查看电池设置", model: server.model, tools, onEvent: event => events.push(event), execute: async (name, args) => {
+    const result = await runAgent({ task: "查看电池设置", model: server.model, tools: clientTools, onEvent: event => events.push(event), execute: async (name, args) => {
       executed.push(name);
       if (name === "get_ui_tree") return observation("s1", "old-screen-content");
       assert.deepEqual(args, { action: "click_element", arguments: { snapshotId: "s1", nodeId: "n1" } });
-      return observation("s2", "电池设置");
+      return { ok: true, result: { action: { accepted: true }, observation: observation("s2", "电池设置").result } };
     } });
     assert.equal(result.status, "completed");
     assert.equal(result.answer, "当前显示电池设置。");
@@ -75,6 +76,28 @@ test("a configured compatible model drives a real HTTP multi-turn tool loop, wit
     assert.equal(JSON.stringify(events).includes("old-screen-content"), false);
     assert.equal(JSON.stringify(events).includes("synthetic-test-key"), false);
   } finally { await server.close(); }
+});
+
+test("production nested swipe schema accepts coordinates and rejects an invalid repeated field before dispatch", async () => {
+  for (const endY of [200, "200"]) {
+    let turn = 0;
+    const args = { action: "swipe", arguments: { snapshotId: "s1", startX: 100, startY: 800, endX: 100, endY } };
+    const server = await fixture((_body, res) => {
+      res.end(JSON.stringify(++turn === 1 ? response(null, [toolCall("swipe1", "act_and_observe", args)]) : response("已读取滑动后的界面。")));
+    });
+    const dispatched: string[] = [];
+    try {
+      const result = await runAgent({ task: "向上滑动并读取", model: server.model, tools: clientTools, execute: async (name, received) => {
+        dispatched.push(name);
+        if (name === "get_ui_tree") return observation("s1", "before synthetic swipe");
+        assert.deepEqual(received, args);
+        return { ok: true, result: { action: { accepted: true }, observation: observation("s2", "after synthetic swipe").result } };
+      } });
+      assert.equal(result.status, typeof endY === "number" ? "completed" : "failed");
+      assert.deepEqual(dispatched, typeof endY === "number" ? ["get_ui_tree", "act_and_observe"] : ["get_ui_tree"]);
+      if (typeof endY !== "number") assert.match(result.error!, /INVALID_TOOL_ARGUMENTS/);
+    } finally { await server.close(); }
+  }
 });
 
 test("all tool calls are validated before dispatch; unknown tools, extra fields and invalid types cannot be executed", async () => {
@@ -131,8 +154,8 @@ test("cancellation during a tool suppresses all later calls even if the executor
   } finally { await server.close(); }
 });
 
-test("host confirmation, manual action and emergency stop errors terminate without a model request", async () => {
-  for (const code of ["CONFIRMATION_REQUIRED", "MANUAL_ACTION_REQUIRED", "EMERGENCY_STOPPED"]) {
+test("host restrictions and disconnected wireless sessions terminate without a model request", async () => {
+  for (const code of ["CONFIRMATION_REQUIRED", "MANUAL_ACTION_REQUIRED", "EMERGENCY_STOPPED", "WIRELESS_SESSION_CHANGED", "WIRELESS_DISCONNECTED", "WIRELESS_TIMEOUT"]) {
     const server = await fixture((_body, res) => { res.end(JSON.stringify(response(null, [toolCall("a", "get_ui_tree")]))); });
     try {
       const result = await runAgent({ task: "read", model: server.model, tools, execute: async () => ({ ok: false, error: { code, message: "private raw message" } }) });
@@ -218,4 +241,20 @@ test("response, tool result and turn budgets stop the run rather than retrying",
     assert.match(limited.error!, /TURN_LIMIT/);
     assert.equal(limited.metrics.modelRequests, 2);
   } finally { await oversized.close(); await looping.close(); }
+});
+
+test("an action without a fresh observation invalidates earlier UI evidence and cannot finish as completed", async () => {
+  let turn = 0;
+  const server = await fixture((body, res) => {
+    turn++;
+    if (turn === 2) assert.equal(JSON.stringify(body.messages).includes("old-screen-marker"), false);
+    res.end(JSON.stringify(turn === 1 ? response(null, [toolCall("a", "act_and_observe", { action: "click_element", arguments: { snapshotId: "s1", nodeId: "n0" } })]) : response("应该完成了")));
+  });
+  try {
+    const result = await runAgent({ task: "navigate", model: server.model, tools, execute: async name => name === "get_ui_tree" ?
+      observation("s1", "old-screen-marker") : { ok: true, result: { action: { accepted: true }, observationError: { code: "NO_ACTIVE_WINDOW" } } } });
+    assert.equal(result.status, "failed");
+    assert.match(result.error!, /NO_OBSERVATION/);
+    assert.equal(result.metrics.toolCalls, 2);
+  } finally { await server.close(); }
 });
