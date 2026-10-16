@@ -338,11 +338,25 @@ test("sensitive and invalid original targets are rejected before any preflight; 
   }
 });
 
-test("fresh hit testing is repeated after rebinding; moved overlapping controls do not get tapped", async () => {
+test("fresh hit testing rejects a target that becomes fully covered after rebinding", async () => {
+  const old = tree([root, button, node("other", { text: "帮助", clickable: true, bounds: [200, 20, 300, 120] })]);
+  const fresh = newer(old);
+  fresh.nodes[2].bounds = [20, 20, 120, 120];
+  rejected(await attempt({ old, fresh }));
+});
+
+test("fresh hit testing recomputes one free point when a sibling moves over the old center", async () => {
   const old = tree([root, button, node("other", { text: "帮助", clickable: true, bounds: [200, 20, 300, 120] })]);
   const fresh = newer(old);
   fresh.nodes[2].bounds = [30, 30, 130, 130];
-  rejected(await attempt({ old, fresh }));
+  const actual = await attempt({ old, fresh });
+  assert.equal(actual.result.ok, true);
+  const dispatched = actual.calls.filter(call => call.method === "act_and_observe");
+  assert.equal(dispatched.length, 1, "only the freshly verified point may reach the phone");
+  const point = dispatched[0]!.args.arguments;
+  assert.equal(point.snapshotId, "session:2");
+  assert.ok(point.startX >= 20 && point.startX < 120 && point.startY >= 20 && point.startY < 120);
+  assert.ok(point.startX < 30 || point.startY < 30, "the old center and overlapping sibling must not be touched");
 });
 
 test("raw swipe, global keys and settings do not add a target preflight", async () => {

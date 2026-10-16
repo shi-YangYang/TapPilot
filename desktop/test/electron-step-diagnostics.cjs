@@ -35,11 +35,27 @@ const deadline = setTimeout(() => { process.stderr.write('FAIL diagnostics deadl
   assert.match(timeline, /界面未变化/);
   assert.doesNotMatch(timeline, /操作并查看结果/);
   send({ type: 'run_finished', status: 'failed', error: { code: 'REPEATED_ACTION', message: '点击目标后界面未变化，已停止。' }, metrics: { totalMs: 130, modelMs: 0, toolMs: 130, modelRequests: 0, toolCalls: 2 } });
-  await until(() => js('document.getElementById("answer")?.textContent.includes("点击目标后界面未变化")'));
+  await until(() => js('document.getElementById("answer-error")?.textContent.includes("点击目标后界面未变化")'));
   assert.equal(await js('document.getElementById("run-badge").textContent'), '未完成');
   // Finishing the run retains the diagnostic labels even when the timeline collapses.
   assert.match(await js('document.getElementById("timeline").textContent'), /NOT_CLICKABLE/);
-  process.stdout.write('PASS task steps show concrete actions, failure codes and unchanged observations\n');
+  send({ type: 'run_finished', status: 'failed', answer: 'Synthetic model claims completion.', error: { code: 'COMPLETION_CONTEXT_CHANGED', message: '收尾时页面已改变，无法确认完成。' }, metrics: { totalMs: 200, modelMs: 50, toolMs: 150, modelRequests: 1, toolCalls: 3, hostReads: 2, completionReads: 1 } });
+  await until(() => js('document.getElementById("answer-error")?.textContent.includes("收尾时页面已改变")'));
+  assert.equal(await js('document.getElementById("answer").textContent'), 'Synthetic model claims completion.');
+  assert.match(await js('document.getElementById("answer-panel").textContent'), /模型说明 · 未确认完成/);
+  assert.equal(await js('document.getElementById("answer-error").getAttribute("role")'), 'alert');
+  assert.equal(await js('document.getElementById("run-badge").textContent'), '未完成');
+  assert.equal(await js('document.getElementById("metric-host-reads").textContent'), '1 次');
+  assert.equal(await js('document.getElementById("metric-completion-reads").textContent'), '1 次');
+  send({ type: 'run_started' });
+  await until(() => js('document.getElementById("run-badge").textContent === "运行中"'));
+  assert.equal(await js('document.getElementById("answer-error")'), null, 'a new run clears the old failure');
+  assert.equal(await js('document.getElementById("answer").textContent'), '');
+  send({ type: 'run_finished', status: 'completed', answer: 'Synthetic verified result.' });
+  await until(() => js('document.getElementById("run-badge").textContent === "已完成"'));
+  assert.equal(await js('document.getElementById("answer").textContent'), 'Synthetic verified result.');
+  assert.equal(await js('document.getElementById("answer-error")'), null);
+  process.stdout.write('PASS task diagnostics, failure reason alongside model answer, completion metrics and next-run reset\n');
 })().catch(error => { process.exitCode = 1; process.stderr.write(`FAIL ${error.stack}\n`); }).finally(() => {
   clearTimeout(deadline);
   rmSync(directory, { recursive: true, force: true });

@@ -71,11 +71,75 @@ test("non-clickable child maps to its clickable parent and touches only the obse
   assert.equal((actual.result.result as Json).action.actedNodeId, "button");
 });
 
-test("tap center must hit the expected target uniquely, including deeper clickable children", async () => {
+test("a partially covered target uses one computed uncovered point, including deeper clickable children", async () => {
   const overlap = node("overlap", [30, 30, 130, 130], { clickable: true });
-  blocked(await attempt({ nodes: [root, button, overlap] }), "NODE_NOT_ACTIONABLE");
-  const deeper = { ...overlap, parentId: button.nodeId };
-  blocked(await attempt({ nodes: [root, button, deeper] }), "NODE_NOT_ACTIONABLE");
+  for (const blocker of [overlap, { ...overlap, clickable: false, text: "浮层提示" }, { ...overlap, parentId: button.nodeId }]) {
+    const actual = await attempt({ nodes: [root, button, blocker] });
+    assert.equal(actual.result.ok, true);
+    assert.deepEqual(actual.calls.map((call) => call.method), ["get_ui_tree", "act_and_observe"], "computing free space must not send trial touches");
+    const point = actual.calls[1]!.args.arguments;
+    assert.ok(point.startX >= 20 && point.startX < 120 && point.startY >= 20 && point.startY < 120);
+    assert.ok(point.startX < 30 || point.startY < 30, "the chosen point must exclude the observed overlapping region");
+    assert.equal(point.startX, point.endX);
+    assert.equal(point.startY, point.endY);
+    assert.equal((actual.result.result as Json).action.actedNodeId, button.nodeId);
+  }
+});
+
+test("full coverage, narrow remaining strips and unknown stacking never authorize a target touch", async () => {
+  for (const blocker of [
+    node("cover", [20, 20, 120, 120], { clickable: true }),
+    node("overlay", [20, 20, 120, 120], { text: "浮层提示" }),
+    node("child", [20, 20, 120, 120], { clickable: true, parentId: "button" }),
+    node("narrow", [26, 20, 120, 120], { clickable: true }),
+  ]) blocked(await attempt({ nodes: [root, button, blocker] }), "NODE_NOT_ACTIONABLE");
+  const content = node("content", [0, 0, 400, 550], { clickable: true });
+  const toolbar = node("toolbar", [0, 0, 400, 100]);
+  const back = node("back", [12, 12, 70, 70], { parentId: "toolbar", clickable: true, text: "返回" });
+  const covered = await attempt({ nodes: [root, content, toolbar, back] }, { ...target, nodeId: "back" });
+  blocked(covered, "NODE_NOT_ACTIONABLE");
+  assert.equal((covered.result.error as Json).details.reason, "AMBIGUOUS_TOUCH_TARGET", "a smaller toolbar button is not evidence of a higher z-order");
+});
+
+test("explicitly hidden siblings do not create phantom overlaps, but visible children remain evidence", async () => {
+  const overlap = node("overlap", [20, 20, 120, 120], { clickable: true });
+  const actual = await attempt({ nodes: [root, button, { ...overlap, visible: false }] });
+  assert.equal(actual.result.ok, true);
+  assert.equal(actual.calls[1]!.args.arguments.startX, 70);
+  assert.equal(actual.calls[1]!.args.arguments.startY, 70);
+  for (const extra of [
+    [node("hidden-container", [0, 0, 400, 600], { visible: false }), { ...overlap, parentId: "hidden-container" }],
+    [node("offscreen-container", [200, 200, 300, 300]), { ...overlap, parentId: "offscreen-container" }],
+  ]) {
+    blocked(await attempt({ nodes: [root, button, ...extra] }), "NODE_NOT_ACTIONABLE");
+  }
+});
+
+test("empty full-screen layout siblings and their distant children do not cover the target", async () => {
+  const layout = node("layout", [0, 0, 400, 600], { className: "android.widget.FrameLayout" });
+  const bottom = node("bottom", [20, 500, 120, 550], { clickable: true, parentId: "layout", text: "底部工具" });
+  for (const extra of [[], [node("partial", [30, 30, 120, 120], { clickable: true })]]) {
+    const actual = await attempt({ nodes: [root, button, layout, bottom, ...extra] });
+    assert.equal(actual.result.ok, true);
+    assert.deepEqual(actual.calls.map((call) => call.method), ["get_ui_tree", "act_and_observe"]);
+    const point = actual.calls[1]!.args.arguments;
+    assert.ok(point.startX >= 20 && point.startX < 120 && point.startY >= 20 && point.startY < 120);
+    if (extra.length) assert.ok(point.startX < 30 || point.startY < 30);
+  }
+});
+
+test("point computation does not route around password, sensitive or non-clickable covering branches", async () => {
+  const partial = node("partial", [30, 30, 120, 120], { clickable: true });
+  for (const extra of [
+    node("password", [20, 20, 29, 29], { password: true }),
+    node("overlay", [20, 20, 120, 120], { text: "浮层提示" }),
+  ]) blocked(await attempt({ nodes: [root, button, partial, extra] }), "NODE_NOT_ACTIONABLE");
+  blocked(await attempt({ nodes: [root, button, partial, node("sensitive", [20, 20, 29, 29], { text: "提交订单" })] }), "MANUAL_ACTION_REQUIRED");
+  const broken = node("broken", [200, 200, 220, 220], { parentId: "missing", clickable: true });
+  blocked(await attempt({ nodes: [root, button, partial, broken] }), "NODE_NOT_ACTIONABLE");
+  const outsideParent = node("container", [200, 200, 300, 300]);
+  blocked(await attempt({ nodes: [root, button, outsideParent, node("sensitive", [20, 20, 120, 120], { parentId: "container", text: "提交订单" })] }), "MANUAL_ACTION_REQUIRED");
+  blocked(await attempt({ nodes: [root, button, outsideParent, node("password", [20, 20, 120, 120], { parentId: "container", password: true })] }), "NODE_NOT_ACTIONABLE");
 });
 
 test("tap is clipped by every observed ancestor and rejects hidden or fully clipped targets", async () => {
@@ -137,8 +201,8 @@ test("local tap refusal retains matching complete evidence with a fixed actionab
     [[root, { ...button, password: true }], "SENSITIVE_TARGET"],
     [[root, { ...button, bounds: [20, 20, 20, 120] }], "INVALID_BOUNDS"],
     [[root, { ...button, bounds: [410, 20, 510, 120] }], "TARGET_CLIPPED"],
-    [[root, button, node("overlap", [30, 30, 130, 130], { clickable: true })], "AMBIGUOUS_TOUCH_TARGET"],
-    [[root, button, node("deeper", [30, 30, 130, 130], { parentId: button.nodeId, clickable: true })], "TOUCH_TARGET_MISMATCH"],
+    [[root, button, node("overlap", [20, 20, 130, 130], { clickable: true })], "AMBIGUOUS_TOUCH_TARGET"],
+    [[root, button, node("deeper", [20, 20, 130, 130], { parentId: button.nodeId, clickable: true })], "TOUCH_TARGET_MISMATCH"],
   ] as [Json[], string][]) {
     const actual = await attempt({ nodes });
     blocked(actual, "NODE_NOT_ACTIONABLE");

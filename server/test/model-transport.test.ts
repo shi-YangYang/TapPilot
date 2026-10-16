@@ -33,13 +33,17 @@ test("every agent turn uses the supplied model transport", async () => {
     id: "synthetic-read", type: "function", function: { name: "get_ui_tree", arguments: "{}" },
   }]) : response("读取完成");
   const result = await runAgent({ task: "Read synthetic UI", model, tools, modelFetch,
-    execute: async () => ({ ok: true, result: { snapshotId: `s${++observations}`, nodes: [{ text: `Synthetic screen ${observations}` }] } }),
+    execute: async () => ({ ok: true, result: { snapshotId: `synthetic:${++observations}`, packageName: "synthetic.fixture", windowId: 4,
+      truncated: false, nodes: [{ text: `Synthetic screen ${observations}` }] } }),
   });
   assert.equal(result.status, "completed");
   assert.equal(result.answer, "读取完成");
   assert.equal(result.metrics.modelRequests, 2);
   assert.equal(requests, 2);
-  assert.equal(observations, 2);
+  assert.equal(observations, 3);
+  assert.equal(result.metrics.toolCalls, 3);
+  assert.equal(result.metrics.hostReads, 1);
+  assert.equal(result.metrics.completionReads, 1);
 });
 
 test("injected transport failures are redacted and never retried", async () => {

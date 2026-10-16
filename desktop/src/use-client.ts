@@ -46,7 +46,7 @@ function stepResult(event: ClientEvent): string | undefined {
   return undefined;
 }
 export interface RunStep { id: string; label: string; active: boolean; failed?: boolean; result?: string; durationMs?: number }
-interface RunState { phase: 'idle' | 'running' | 'completed' | 'cancelled' | 'failed'; demo: boolean; answer: string; metrics: Metrics; steps: RunStep[] }
+interface RunState { phase: 'idle' | 'running' | 'completed' | 'cancelled' | 'failed'; demo: boolean; answer: string; error?: ClientEvent['error']; metrics: Metrics; steps: RunStep[] }
 const initialRun: RunState = { phase: 'idle', demo: false, answer: '', metrics: emptyMetrics, steps: [] };
 function runReducer(state: RunState, event: ClientEvent): RunState {
   if (event.type === 'run_started') return { ...initialRun, phase: 'running', demo: Boolean(event.demo), metrics: { ...emptyMetrics } };
@@ -66,7 +66,9 @@ function runReducer(state: RunState, event: ClientEvent): RunState {
       ...(event.type === 'tool_end' ? { label: toolLabel(event), failed: event.ok === false, result: stepResult(event) } : {}),
     } : step) };
   }
-  if (event.type === 'run_finished') return { ...state, phase: event.status || 'failed', answer: event.answer || event.error?.message || (event.status === 'cancelled' ? '任务已取消，请在手机确认最后一步的结果。' : '任务已结束。'), metrics: event.metrics || state.metrics, steps: state.steps.map(step => ({ ...step, active: false })) };
+  if (event.type === 'run_finished') return { ...state, phase: event.status || 'failed', error: event.error,
+    answer: event.answer || (event.error ? '' : event.status === 'cancelled' ? '任务已取消，请在手机确认最后一步的结果。' : '任务已结束。'),
+    metrics: event.metrics || state.metrics, steps: state.steps.map(step => ({ ...step, active: false })) };
   return state;
 }
 

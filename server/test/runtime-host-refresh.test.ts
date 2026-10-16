@@ -5,11 +5,11 @@ import { runAgent, type AgentOptions } from "../src/runtime/index.js";
 
 type Json = Record<string, any>;
 type Call = { name: string; args?: Json };
-const tree = (id: string, text = "Synthetic folder") => ({ snapshotId: id, revision: 1, truncated: false, nodes: [
+const tree = (id: string, text = "Synthetic folder") => ({ snapshotId: id.startsWith("synthetic:") ? id : `synthetic:${id}`, packageName: "synthetic.fixture", windowId: 4, revision: 1, truncated: false, nodes: [
   { nodeId: "n1", text, bounds: [10, 20, 80, 90], enabled: true, clickable: true },
 ] });
 const observed = (id: string, text?: string) => ({ ok: true, result: tree(id, text) });
-const action = (id = "initial"): Call => ({ name: "act_and_observe", args: { action: "click_element", arguments: { snapshotId: id, nodeId: "n1" } } });
+const action = (id = "initial"): Call => ({ name: "act_and_observe", args: { action: "click_element", arguments: { snapshotId: id.startsWith("synthetic:") ? id : `synthetic:${id}`, nodeId: "n1" } } });
 const accepted = (id = "immediate", text?: string) => ({ ok: true, result: { action: { accepted: true }, observation: tree(id, text) } });
 const toolResults = (body: Json): Json[] => body.messages.filter((message: Json) => message.role === "tool").map((message: Json) => JSON.parse(message.content));
 const advertised = (body: Json): string[] => body.tools.map((tool: Json) => tool.function.name);
@@ -55,7 +55,7 @@ test("one host verification removes the model read round before a node-based tou
     if (turn === 0) return [action()];
     const latest = toolResults(body).at(-1)!;
     if (latest.hostGuidance?.code === "NATIVE_CLICK_INEFFECTIVE") {
-      assert.equal(latest.result.snapshotId, "verified");
+      assert.equal(latest.result.snapshotId, "synthetic:verified");
       return [{ name: "act_and_observe", args: { action: "tap_element", arguments: {
         snapshotId: latest.result.snapshotId, nodeId: "n1",
       } } }];
@@ -70,10 +70,10 @@ test("one host verification removes the model read round before a node-based tou
   assert.equal(result.status, "completed");
   assert.equal(requests.length, 3, "click → fallback → finish, without a model round to request verification");
   assert.deepEqual(actions, ["click_element", "tap_element"]);
-  assert.equal(reads, 2);
-  assert.equal(result.metrics.toolCalls, 4);
-  assert.equal(result.metrics.hostReads, 1);
-  assert.equal(events.filter(event => event.type === "tool_end" && event.toolName === "get_ui_tree").length, 2);
+  assert.equal(reads, 3);
+  assert.equal(result.metrics.toolCalls, 5);
+  assert.equal(result.metrics.hostReads, 2);
+  assert.equal(events.filter(event => event.type === "tool_end" && event.toolName === "get_ui_tree").length, 3);
 });
 
 test("tap verification reports the touch outcome without suggesting another swipe attempt", async () => {
@@ -81,7 +81,7 @@ test("tap verification reports the touch outcome without suggesting another swip
   const { result, events } = await scenario((turn, body) => {
     assertValidToolPairs(body);
     assert.match(body.messages[0].content, /prefer tap_element with the latest snapshotId\/nodeId/);
-    if (turn === 0) return [{ name: "act_and_observe", args: { action: "tap_element", arguments: { snapshotId: "initial", nodeId: "n1" } } }];
+    if (turn === 0) return [{ name: "act_and_observe", args: { action: "tap_element", arguments: { snapshotId: "synthetic:initial", nodeId: "n1" } } }];
     const history = toolResults(body);
     assert.equal(history.at(-1)!.hostGuidance.code, "TOUCH_TAP_INEFFECTIVE");
     assert.match(history.at(-1)!.hostGuidance.message, /Do not repeat the tap or rename it to swipe/);
@@ -91,15 +91,15 @@ test("tap verification reports the touch outcome without suggesting another swip
   }, async name => name === "get_ui_tree" ? observed(++reads === 1 ? "initial" : "verified") : accepted());
   assert.equal(result.status, "completed");
   assert.equal(result.metrics.modelRequests, 2);
-  assert.equal(result.metrics.hostReads, 1);
-  assert.equal(reads, 2);
+  assert.equal(result.metrics.hostReads, 2);
+  assert.equal(reads, 3);
   assert.deepEqual(events.filter(event => event.type === "tool_start" && event.toolName === "act_and_observe").map(event => event.action), ["tap_element"]);
 });
 
 test("tap remains a UI-changing action and cannot share a batch with another action", async () => {
   const calls: string[] = [];
   const { result } = await scenario(() => [
-    { name: "act_and_observe", args: { action: "tap_element", arguments: { snapshotId: "initial", nodeId: "n1" } } },
+    { name: "act_and_observe", args: { action: "tap_element", arguments: { snapshotId: "synthetic:initial", nodeId: "n1" } } },
     action(),
   ], async name => { calls.push(name); return observed("initial"); });
   assert.equal(result.status, "failed");
@@ -115,7 +115,7 @@ test("recoverable snapshot errors get one fresh observation without replaying th
         if (turn === 0) return [action()];
         assertValidToolPairs(body);
         const history = toolResults(body);
-        assert.equal(history.at(-1)!.result.snapshotId, "refreshed");
+        assert.equal(history.at(-1)!.result.snapshotId, "synthetic:refreshed");
         assert.ok(JSON.stringify(history).includes(code));
         return undefined;
       }, async name => {
@@ -123,10 +123,11 @@ test("recoverable snapshot errors get one fresh observation without replaying th
         if (name === "get_ui_tree") return observed(calls.length === 1 ? "initial" : "refreshed", "Synthetic refreshed page");
         return nested ? { ok: true, result: { action: { accepted: true }, observationError: { code } } } : { ok: false, error: { code } };
       });
-      assert.equal(result.status, "completed");
-      assert.deepEqual(calls, ["get_ui_tree", "act_and_observe", "get_ui_tree"]);
+      assert.equal(result.status, nested ? "completed" : "failed");
+      if (!nested) assert.match(result.error!, /ACTION_NOT_COMPLETED/);
+      assert.deepEqual(calls, nested ? ["get_ui_tree", "act_and_observe", "get_ui_tree", "get_ui_tree"] : ["get_ui_tree", "act_and_observe", "get_ui_tree"]);
       assert.equal(result.metrics.modelRequests, 2);
-      assert.equal(result.metrics.hostReads, 1);
+      assert.equal(result.metrics.hostReads, nested ? 2 : 1);
     }
   }
 });
@@ -138,8 +139,8 @@ test("a changed combined observation does not issue a host refresh", async () =>
     return name === "get_ui_tree" ? observed("initial") : accepted("changed", "New synthetic page");
   });
   assert.equal(result.status, "completed");
-  assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
-  assert.equal(result.metrics.hostReads, 0);
+  assert.deepEqual(calls, ["get_ui_tree", "act_and_observe", "get_ui_tree"]);
+  assert.equal(result.metrics.hostReads, 1);
 });
 
 test("a preflight target refusal supplies the fresh UI without another host or model read round", async () => {
@@ -150,7 +151,7 @@ test("a preflight target refusal supplies the fresh UI without another host or m
     const latest = toolResults(body).at(-1)!;
     assert.equal(latest.ok, false);
     assert.equal(latest.error.code, "TARGET_CHANGED");
-    assert.equal(latest.observation.snapshotId, "fresh-before-dispatch");
+    assert.equal(latest.observation.snapshotId, "synthetic:fresh-before-dispatch");
     assert.equal(latest.hostAction, undefined, "a refused target must never be recorded as accepted");
     assert.equal(advertised(body).includes("get_ui_tree"), false);
     return undefined;
@@ -161,7 +162,8 @@ test("a preflight target refusal supplies the fresh UI without another host or m
       observation: tree("fresh-before-dispatch", "Synthetic new context"), meta: { preflightRead: true, preflightMs: 12 },
     };
   });
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "failed");
+  assert.match(result.error!, /ACTION_NOT_COMPLETED/);
   assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
   assert.equal(result.metrics.preflightReads, 1);
   assert.equal(result.metrics.hostReads, 0);
@@ -191,7 +193,7 @@ test("a verified local tap refusal retains the same UI and specific reason witho
     assertValidToolPairs(body);
     if (turn === 0) return [{ name: "act_and_observe", args: { ...action().args, action: "tap_element" } }];
     const latest = toolResults(body).at(-1)!;
-    assert.equal(latest.observation.snapshotId, "initial");
+    assert.equal(latest.observation.snapshotId, "synthetic:initial");
     assert.equal(latest.error.details.reason, "NO_CLICKABLE_TARGET");
     assert.equal(latest.hostAction, undefined, "a local refusal is not an accepted action");
     assert.equal(advertised(body).includes("get_ui_tree"), false);
@@ -204,7 +206,8 @@ test("a verified local tap refusal retains the same UI and specific reason witho
       observation: tree("initial"), meta: { localRejection: true },
     };
   });
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "failed");
+  assert.match(result.error!, /ACTION_NOT_COMPLETED/);
   assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
   assert.equal(result.metrics.hostReads, 0);
   assert.equal(events.find(event => event.type === "tool_end" && event.toolName === "act_and_observe")?.errorReason, "NO_CLICKABLE_TARGET");
@@ -264,8 +267,8 @@ test("an explicit full read later in the same model batch satisfies verification
     return undefined;
   }, async name => name === "get_ui_tree" ? observed(++reads === 1 ? "initial" : "explicit") : accepted());
   assert.equal(result.status, "completed");
-  assert.equal(reads, 2);
-  assert.equal(result.metrics.hostReads, 0);
+  assert.equal(reads, 3);
+  assert.equal(result.metrics.hostReads, 1);
 });
 
 test("restricted or terminal action errors never trigger automatic refresh or mutation replay", async () => {
@@ -337,7 +340,7 @@ test("accepted actions with missing or unusable observations get one host read b
     const { result } = await scenario((turn, body) => {
       assertValidToolPairs(body);
       if (turn === 0) return [action()];
-      assert.equal(toolResults(body).at(-1)!.result.snapshotId, "recovered");
+      assert.equal(toolResults(body).at(-1)!.result.snapshotId, "synthetic:recovered");
       assert.equal(advertised(body).includes("get_ui_tree"), false);
       return undefined;
     }, async name => {
@@ -346,9 +349,9 @@ test("accepted actions with missing or unusable observations get one host read b
         { ok: true, result: { action: { accepted: true }, ...detail } };
     });
     assert.equal(result.status, "completed");
-    assert.deepEqual(calls, ["get_ui_tree", "act_and_observe", "get_ui_tree"]);
+    assert.deepEqual(calls, ["get_ui_tree", "act_and_observe", "get_ui_tree", "get_ui_tree"]);
     assert.equal(result.metrics.modelRequests, 2);
-    assert.equal(result.metrics.hostReads, 1);
+    assert.equal(result.metrics.hostReads, 2);
   }
 });
 
@@ -388,7 +391,7 @@ test("event-only and selector waits automatically supply the complete screen, in
       const { result } = await scenario((turn, body) => {
         assertValidToolPairs(body);
         if (turn === 0) return [{ name: "wait_for_ui_change", args: { sinceRevision: 1, timeoutMs: 1, ...(selector ? { selector } : {}) } }];
-        assert.equal(toolResults(body).at(-1)!.result.snapshotId, "after-wait");
+        assert.equal(toolResults(body).at(-1)!.result.snapshotId, "synthetic:after-wait");
         assert.equal(advertised(body).includes("get_ui_tree"), false);
         return undefined;
       }, async name => {
@@ -398,9 +401,9 @@ test("event-only and selector waits automatically supply the complete screen, in
           ...(selector ? { snapshotId: "partial-wait", elements: timedOut ? [] : [{ nodeId: "n1", text: selector.text }] } : {}) } };
       });
       assert.equal(result.status, "completed");
-      assert.deepEqual(calls, ["get_ui_tree", "wait_for_ui_change", "get_ui_tree"]);
+      assert.deepEqual(calls, ["get_ui_tree", "wait_for_ui_change", "get_ui_tree", "get_ui_tree"]);
       assert.equal(result.metrics.modelRequests, 2);
-      assert.equal(result.metrics.hostReads, 1);
+      assert.equal(result.metrics.hostReads, 2);
     }
   }
 });
@@ -415,8 +418,8 @@ test("a full read in the same wait batch satisfies recovery without a second hos
   }, async name => name === "get_ui_tree" ? observed(++reads === 1 ? "initial" : "explicit", "Synthetic ready page") :
     { ok: true, result: { revision: 2, changed: true, timedOut: false } });
   assert.equal(result.status, "completed");
-  assert.equal(reads, 2);
-  assert.equal(result.metrics.hostReads, 0);
+  assert.equal(reads, 3);
+  assert.equal(result.metrics.hostReads, 1);
 });
 
 test("cancellation after an event-only wait prevents its recovery read and the next model request", async () => {
@@ -451,7 +454,7 @@ test("complete observations reduce advertised tools and avoid a model round requ
       }
       if (turn === 0) return [action()];
       if (turn === 1 && names.includes("get_ui_tree")) return [{ name: "get_ui_tree" }];
-      assert.equal(toolResults(body).at(-1)!.result.observation?.snapshotId ?? toolResults(body).at(-1)!.result.snapshotId, "after-action");
+      assert.equal(toolResults(body).at(-1)!.result.observation?.snapshotId ?? toolResults(body).at(-1)!.result.snapshotId, "synthetic:after-action");
       return undefined;
     }, async name => {
       calls.push(name);
@@ -460,8 +463,8 @@ test("complete observations reduce advertised tools and avoid a model round requ
     }, undefined, supplied);
     assert.equal(result.status, "completed");
     assert.equal(requests.length, canWait ? 2 : 3);
-    assert.deepEqual(calls, canWait ? ["get_ui_tree", "act_and_observe"] : ["get_ui_tree", "act_and_observe", "get_ui_tree"]);
-    assert.equal(result.metrics.hostReads, 0);
+    assert.deepEqual(calls, canWait ? ["get_ui_tree", "act_and_observe", "get_ui_tree"] : ["get_ui_tree", "act_and_observe", "get_ui_tree", "get_ui_tree"]);
+    assert.equal(result.metrics.hostReads, 1);
   }
 });
 
@@ -481,7 +484,7 @@ test("partial finds and failed actions restore read tools; unadvertised historic
       return [{ name: "get_ui_tree" }];
     }
     if (turn === 2) {
-      assert.equal(toolResults(body).at(-1)!.result.snapshotId, "fresh-read");
+      assert.equal(toolResults(body).at(-1)!.result.snapshotId, "synthetic:fresh-read");
       assert.equal(names.includes("get_ui_tree"), false);
       return [action("fresh-read")];
     }
@@ -512,6 +515,7 @@ test("truncated screens or an unusable event-wait schema retain explicit read to
     }, async () => ({ ok: true, result: { ...tree("initial"),
       ...(condition === "truncated" ? { truncated: true } : {}), ...(condition === "missing-revision" ? { revision: undefined } : {}),
     } }), undefined, supplied);
-    assert.equal(result.status, "completed");
+    assert.equal(result.status, condition === "truncated" ? "failed" : "completed");
+    if (condition === "truncated") assert.match(result.error!, /NO_OBSERVATION/);
   }
 });

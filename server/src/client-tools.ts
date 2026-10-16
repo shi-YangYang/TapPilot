@@ -9,6 +9,7 @@ import { ApprovalQueue } from "./approvals.js";
 import { Bridge, type PhoneBridge } from "./bridge.js";
 import { AgentError, publicError } from "./errors.js";
 import { completeRefreshObservation, prepareTargetRefresh, rebindRefreshedTarget, type NodeAction } from "./client-target-refresh.js";
+import { intersectTouchRects, touchGeometry, unobstructedTouchPoint, type TouchRect } from "./client-touch-geometry.js";
 import { ToolController, toolSchemas, type ToolName } from "./tools.js";
 import type { WirelessHub } from "./wireless.js";
 
@@ -61,6 +62,12 @@ export function compactUi(value: unknown): unknown {
 
 // Conservative client guard, not a claim to classify every possible financial or destructive action.
 const sensitiveLabel = /付款|支付|下单|提交订单|确认购买|立即购买|删除|清空|转账|发红包|发送|发布|卸载|恢复出厂|重置设备|\b(pay|purchase|checkout|buy\s+now|delete|erase|send|submit|publish|uninstall|transfer)\b/i;
+// Empty layout rectangles only describe grouping. Treat actual content/controls
+// as competing touch evidence, without inventing an opaque fill for wrappers.
+function hasTouchContent(node: Json): boolean {
+  return ["clickable", "scrollable", "editable", "checkable", "password"].some((field) => node[field] === true) ||
+    [node.text, node.contentDescription].some((value) => typeof value === "string" && value.trim().length > 0);
+}
 
 // Fixed host diagnostics, never node labels or arbitrary phone-provided details.
 type TouchRejectionReason = "INCOMPLETE_TREE" | "INVALID_HIERARCHY" | "TARGET_DISABLED" | "TARGET_HIDDEN" |
@@ -100,6 +107,7 @@ export function createPhoneClient(transport: PhoneBridge, deviceAccess: Adb): Ph
     if (!Array.isArray(nodes)) return;
     const selected = new Set<string>();
     const containingLabels = new Set<string>();
+    let unrelatedCoveringContent = false;
     if (action === "click_element") {
       let node = nodes.find((entry) => entry.nodeId === target.nodeId);
       // Match Android's possible clickable-parent fallback before assessing descendant labels.
@@ -114,31 +122,23 @@ export function createPhoneClient(transport: PhoneBridge, deviceAccess: Adb): Ph
       // A short gesture needs one unambiguous target at both ends, from a full observation.
       if (Math.hypot(Number(target.endX) - Number(target.startX), Number(target.endY) - Number(target.startY)) > 24) return;
       if (!Array.isArray(latest.nodes) || latest.truncated !== false) throw touchRejection("INCOMPLETE_TREE", "A short gesture requires a complete current UI tree.");
-      const byId = new Map(nodes.map((node) => [String(node.nodeId), node]));
-      function descendsFrom(node: Json, ancestor: Json): boolean {
-        const visited = new Set<string>();
-        let parentId = node.parentId;
-        while (typeof parentId === "string" && !visited.has(parentId)) {
-          if (parentId === ancestor.nodeId) return true;
-          visited.add(parentId);
-          parentId = byId.get(parentId)?.parentId;
-        }
-        return false;
-      }
+      const geometry = touchGeometry(nodes);
       const hitTarget = (x: number, y: number): Json => {
-        const containing = nodes.filter((node) => {
-          const b = node.bounds as number[];
-          return Array.isArray(b) && x >= b[0]! && x < b[2]! && y >= b[1]! && y < b[3]!;
-        });
+        const containing = nodes.filter((node) => geometry.contains(node, x, y));
         if (containing.some((node) => node.password === true)) throw touchRejection("SENSITIVE_TARGET", "The touch point intersects a password control. Do not use another gesture to bypass this restriction.");
         for (const node of containing) containingLabels.add(String(node.nodeId));
         const clickable = containing.filter((node) => node.clickable === true);
-        const deepest = clickable.filter((node) => !clickable.some((other) => other !== node && descendsFrom(other, node)));
+        const deepest = clickable.filter((node) => !clickable.some((other) => other !== node && geometry.descendsFrom(other, node)));
         if (!deepest.length) throw touchRejection("NO_CLICKABLE_TARGET", "No clickable control was observed at the touch point. Re-reading an unchanged UI or changing tools cannot make this point actionable.");
         if (deepest.length !== 1) throw touchRejection("AMBIGUOUS_TOUCH_TARGET", "Multiple unrelated clickable controls overlap the touch point. Choose a distinct observed target or explain the limitation.");
         if (deepest[0]!.enabled !== true) throw touchRejection("TARGET_DISABLED", "The control at the touch point is disabled.");
         if (deepest[0]!.password === true) throw touchRejection("SENSITIVE_TARGET", "The control at the touch point is sensitive.");
         if (deepest[0]!.visible === false) throw touchRejection("TARGET_HIDDEN", "The control at the touch point is hidden.");
+        if (geometry.hasHiddenAncestor(deepest[0]!)) throw touchRejection("HIDDEN_ANCESTOR", "The observed control has a hidden ancestor, so its touch visibility cannot be verified.");
+        // A content-bearing sibling can be an overlay, but a bare layout does
+        // not establish that its whole bounding rectangle is opaque.
+        unrelatedCoveringContent ||= containing.some((node) => hasTouchContent(node) && node !== deepest[0] &&
+          !geometry.descendsFrom(node, deepest[0]!) && !geometry.descendsFrom(deepest[0]!, node));
         return deepest[0]!;
       };
       const start = hitTarget(Number(target.startX), Number(target.startY));
@@ -157,6 +157,7 @@ export function createPhoneClient(transport: PhoneBridge, deviceAccess: Adb): Ph
     if (nodes.some((node) => (selected.has(String(node.nodeId)) || containingLabels.has(String(node.nodeId))) && sensitiveLabel.test(`${node.text ?? ""} ${node.contentDescription ?? ""} ${node.resourceId ?? ""}`.replace(/_/g, " ")))) {
       throw new AgentError("MANUAL_ACTION_REQUIRED", "This control may send, purchase, delete, or submit. Complete this step yourself on the phone; TapPilot has not clicked it.");
     }
+    if (unrelatedCoveringContent) throw touchRejection("AMBIGUOUS_TOUCH_TARGET", "An unrelated visible branch covers the touch point and its stacking order is unknown.");
   }
   function nodeTouch(target: Json): { arguments: Json; targetNodeId: string; actedNodeId: string } {
     if (!latest) throw new AgentError("NO_KNOWN_SNAPSHOT", "Read the full current UI before tapping a control.");
@@ -217,11 +218,39 @@ export function createPhoneClient(transport: PhoneBridge, deviceAccess: Adb): Ph
     if (left >= right || top >= bottom) throw touchRejection("TARGET_CLIPPED", "The selected control has no visible region within all observed ancestor bounds.");
     const x = Math.floor((left + right) / 2), y = Math.floor((top + bottom) / 2);
     if (x < left || y < top || x >= right || y >= bottom) throw touchRejection("INVALID_BOUNDS", "The observed visible region does not contain a valid integer touch point.");
-    const gesture = { snapshotId: target.snapshotId, startX: x, startY: y, endX: x, endY: y, durationMs: 80 };
-    // Apply both the original node intent and the actual hit-test policy. No fallback
-    // scan, native click, or mutation retry precedes this single dispatch.
+    let gesture = { snapshotId: target.snapshotId, startX: x, startY: y, endX: x, endY: y, durationMs: 80 };
+    // Apply the original intent before considering any touch point. In particular,
+    // another point in a sensitive control must never bypass its label protection.
     guardSensitive({ action: "click_element", arguments: target });
-    guardSensitive({ action: "swipe", arguments: gesture }, String(actual.nodeId));
+    try {
+      guardSensitive({ action: "swipe", arguments: gesture }, String(actual.nodeId));
+    } catch (error) {
+      const reason = publicError(error).details?.reason;
+      if (reason !== "AMBIGUOUS_TOUCH_TARGET" && reason !== "TOUCH_TARGET_MISMATCH") throw error;
+      const geometry = touchGeometry(nodes);
+      const region: TouchRect = [left, top, right, bottom];
+      const blockers: TouchRect[] = [];
+      for (const node of nodes) {
+        const bounds = geometry.region(node);
+        if (!bounds || !intersectTouchRects(region, bounds)) continue;
+        // Do not route around a password field or an overlapping sensitive label.
+        // Their presence is not evidence that the rest of the control is harmless.
+        if (node.password === true) throw touchRejection("SENSITIVE_TARGET", "The intended touch region intersects a password control.");
+        if (sensitiveLabel.test(`${node.text ?? ""} ${node.contentDescription ?? ""} ${node.resourceId ?? ""}`.replace(/_/g, " "))) {
+          throw new AgentError("MANUAL_ACTION_REQUIRED", "The intended touch region intersects a potentially sensitive control. Complete this step yourself on the phone; TapPilot has not clicked it.");
+        }
+        if (node === actual || geometry.descendsFrom(actual, node)) continue;
+        // Deeper buttons own their portion of the target. Unrelated observed
+        // content also blocks it; empty layout wrappers are not solid overlays.
+        if (node.clickable === true || (hasTouchContent(node) && !geometry.descendsFrom(node, actual))) blockers.push(bounds);
+      }
+      const point = unobstructedTouchPoint(region, blockers);
+      if (!point) throw error;
+      gesture = { ...gesture, startX: point.x, startY: point.y, endX: point.x, endY: point.y };
+      // This is a computation over one complete observation, not a sequence of
+      // trial touches. Recheck the same policy, then dispatch exactly once below.
+      guardSensitive({ action: "swipe", arguments: gesture }, String(actual.nodeId));
+    }
     return { arguments: gesture, targetNodeId: String(requested.nodeId), actedNodeId: String(actual.nodeId) };
   }
   return {

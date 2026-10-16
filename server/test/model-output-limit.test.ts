@@ -39,7 +39,8 @@ test("truncated tool arguments and final answers never execute actions, retry or
     const result = await runAgent({ task: "Synthetic task", model: config, tools: clientTools,
       execute: async name => {
         executed.push(name);
-        return { ok: true, result: { snapshotId: "synthetic:1", truncated: false, nodes: [{ nodeId: "n1", text: "Synthetic button", clickable: true }] } };
+        return { ok: true, result: { snapshotId: "synthetic:1", packageName: "synthetic.fixture", windowId: 4,
+          truncated: false, nodes: [{ nodeId: "n1", text: "Synthetic button", clickable: true }] } };
       },
       modelFetch: async () => { requests++; return response(message, "length"); },
     });

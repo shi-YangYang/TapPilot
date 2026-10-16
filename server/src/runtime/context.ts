@@ -3,6 +3,7 @@ import type { Message } from "./model.js";
 import { RuntimeError } from "./model.js";
 
 type ActionOutcome = { action: string; accepted: true; observationChanged?: boolean };
+type HostGuidance = { code: string; message: string };
 type Entry = { message: Message; snapshot: boolean; actionOutcome?: ActionOutcome };
 const OMIT_FROM_DIGEST = new Set(["snapshotId", "revision", "meta", "timings", "durationMs", "timestamp"]);
 const ACTION_NAMES = new Set(["tap_element", "click_element", "input_text", "scroll", "swipe", "press_key", "open_settings"]);
@@ -24,15 +25,13 @@ function hasSnapshot(value: unknown, depth = 0): boolean {
   return typeof obj.snapshotId === "string" || Object.values(obj).some(item => hasSnapshot(item, depth + 1));
 }
 
-export function fullObservation(value: unknown, depth = 0): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || depth > 8) return undefined;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.snapshotId === "string" && Array.isArray(obj.nodes)) return obj;
-  for (const item of Object.values(obj)) {
-    const found = fullObservation(item, depth + 1);
-    if (found) return found;
-  }
-  return undefined;
+export function fullObservation(value: unknown): Record<string, unknown> | undefined {
+  const object = (item: unknown): Record<string, unknown> | undefined => item !== null && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : undefined;
+  const root = object(value), result = object(root?.result);
+  // Only protocol observation paths are evidence. In particular, a target preview
+  // or arbitrary nested action/metadata field must never replace the current UI.
+  return [root, result, object(root?.observation), object(result?.observation)].find(item =>
+    typeof item?.snapshotId === "string" && Array.isArray(item.nodes));
 }
 
 function summary(value: unknown, actionOutcome?: ActionOutcome): string {
@@ -52,7 +51,7 @@ export class Conversation {
     this.entries = [{ message: { role: "system", content: system }, snapshot: false }, { message: { role: "user", content: task }, snapshot: false }];
   }
   assistant(message: Message): void { this.entries.push({ message, snapshot: false }); }
-  result(id: string, value: Record<string, unknown>, invalidateSnapshot = false, actionName?: string): { stateChanged: boolean; observationChanged?: boolean } {
+  result(id: string, value: Record<string, unknown>, invalidateSnapshot = false, actionName?: string, recoveryGuidance?: HostGuidance): { stateChanged: boolean; observationChanged?: boolean } {
     const snapshot = hasSnapshot(value);
     let stateChanged = false;
     let observationChanged: boolean | undefined;
@@ -83,7 +82,7 @@ export class Conversation {
     const pointerStillIneffective = !invalidateSnapshot && completeObservation && nextDigest !== undefined && nextDigest === nextPendingPointerAction?.digest;
     // Reserved host fields must be constructed here; untrusted tool content cannot supply guidance.
     const { hostGuidance: _untrustedGuidance, hostAction: _untrustedAction, ...toolValue } = value;
-    const guidance = pointerStillIneffective && nextPendingPointerAction?.action === "tap_element" ? {
+    const guidance = recoveryGuidance ?? (pointerStillIneffective && nextPendingPointerAction?.action === "tap_element" ? {
       code: "TOUCH_TAP_INEFFECTIVE",
       message: "The previous tap_element dispatched a real touch, but its immediate observation and this later full UI read are both unchanged. Stop attempting this target and explain the limitation. Do not repeat the tap or rename it to swipe to touch the same target again. Never bypass a protected or restricted action.",
     } : pointerStillIneffective ? {
@@ -91,7 +90,7 @@ export class Conversation {
       message: "The previous native click was accepted, but its immediate observation and this later full UI read are both unchanged. Do not repeat that native click. If the intended target is still unambiguous, you may try one tap_element using its snapshotId and nodeId from THIS latest observation, or explain that it cannot be operated. This dispatches a real touch; the host computes the location from the current node. Never bypass a protected or restricted action. If that touch also has no effect, stop and explain the limitation.",
     } : accepted && observationChanged === false ? {
       code: "OBSERVATION_UNCHANGED", message: "Android accepted the action, but the observed UI is unchanged. Acceptance does not prove the intended effect. Inspect the host's following fresh read or wait for the expected control before deciding again; an animation may still be running. Do not blindly repeat. A tap_element is already a real touch: do not replace it with a stationary swipe to repeat the same attempt. Never bypass a protected or restricted action.",
-    } : undefined;
+    } : undefined);
     const stored = { ...toolValue, ...(actionOutcome ? { hostAction: actionOutcome } : {}), ...(guidance ? { hostGuidance: guidance } : {}) };
     const content = JSON.stringify(stored);
     if (Buffer.byteLength(content) > 96 * 1024) throw new RuntimeError("TOOL_RESULT_LIMIT", "界面数据过大，请使用更小的 UI 树或控件查找。动作结果不会自动重试。");

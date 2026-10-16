@@ -7,9 +7,9 @@ type Json = Record<string, unknown>;
 type Call = { name: string; args?: Json };
 const read = { name: "get_ui_tree" };
 const node = { nodeId: "n1", text: "synthetic-private-marker", clickable: true };
-const tree = (id: number, text = node.text) => ({ snapshotId: `s${id}`, revision: id, packageName: "synthetic.fixture", nodes: [{ ...node, text }] });
+const tree = (id: number, text = node.text) => ({ snapshotId: `synthetic:s${id}`, revision: id, packageName: "synthetic.fixture", windowId: 4, truncated: false, nodes: [{ ...node, text }] });
 const observed = (id: number, text?: string) => ({ ok: true, result: tree(id, text) });
-const click = (id: number): Call => ({ name: "act_and_observe", args: { action: "click_element", arguments: { snapshotId: `s${id}`, nodeId: "n1" }, waitMs: id * 100 } });
+const click = (id: number): Call => ({ name: "act_and_observe", args: { action: "click_element", arguments: { snapshotId: `synthetic:s${id}`, nodeId: "n1" }, waitMs: id * 100 } });
 
 async function scenario(calls: Call[], execute: AgentOptions["execute"], inspect?: (turn: number, body: Json) => void) {
   let turn = 0;
@@ -37,7 +37,7 @@ test("progress guard observes a third read before deciding whether it repeated",
     return observed(dispatches, dispatches === 4 ? "new synthetic page" : undefined);
   });
   assert.equal(result.status, "completed");
-  assert.equal(dispatches, 4);
+  assert.equal(dispatches, 5);
 });
 
 test("progress guard excludes a failed host read from the model repetition budget", async () => {
@@ -45,7 +45,7 @@ test("progress guard excludes a failed host read from the model repetition budge
   const { result } = await scenario([read, read, read], async () => ++dispatches < 4 ?
     { ok: false, error: { code: "NO_ACTIVE_WINDOW" } } : observed(dispatches));
   assert.equal(result.status, "completed");
-  assert.equal(dispatches, 4);
+  assert.equal(dispatches, 5);
 });
 
 test("progress guard recognizes changed results of the same partial find query", async () => {
@@ -56,7 +56,8 @@ test("progress guard recognizes changed results of the same partial find query",
     finds++;
     return { ok: true, result: { snapshotId: `find${finds}`, revision: finds, elements: finds === 3 ? [node] : [] } };
   });
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "failed");
+  assert.match(result.error!, /NO_OBSERVATION/);
   assert.equal(finds, 3);
 });
 
@@ -110,12 +111,12 @@ test("progress guard preserves the accepted action outcome and supplies a later 
     const priorAction = messages.filter(message => message.role === "tool").map(message => JSON.parse(message.content as string)).find(value => value.hostAction);
     assert.deepEqual(priorAction.hostAction, { action: "click_element", accepted: true, observationChanged: false });
     assert.equal(latest.hostGuidance, undefined);
-    assert.equal(latest.result.snapshotId, "s2");
+    assert.equal(latest.result.snapshotId, "synthetic:s2");
     assert.match(messages[0]!.content as string, /stop if it also has no effect/);
   });
   assert.equal(result.status, "completed");
   assert.equal(actions, 1);
-  assert.equal(reads, 2);
+  assert.equal(reads, 3);
   assert.equal(events.find(event => event.type === "tool_end" && event.turn === 1 && event.toolName === "get_ui_tree")!.observationChanged, true);
 });
 
@@ -142,13 +143,13 @@ test("a changed third post-wait screen clears event-wait repetition and allows t
   }, (turn, body) => {
     if (turn !== 3) return;
     const latest = JSON.parse((body.messages as Json[]).at(-1)!.content as string);
-    assert.equal(latest.result.snapshotId, "s4");
+    assert.equal(latest.result.snapshotId, "synthetic:s4");
     assert.equal(latest.result.nodes[0].text, "Synthetic loading completed");
   });
   assert.equal(result.status, "completed");
   assert.equal(dispatched, 3);
-  assert.equal(reads, 4);
-  assert.equal(result.metrics.hostReads, 3);
+  assert.equal(reads, 5);
+  assert.equal(result.metrics.hostReads, 4);
   assert.equal(result.metrics.modelRequests, 4);
   assert.equal(events.find(event => event.type === "tool_end" && event.turn === 3 && event.toolName === "get_ui_tree")!.observationChanged, true);
 });

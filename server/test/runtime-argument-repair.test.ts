@@ -8,7 +8,7 @@ const actionArgs = { action: "tap_element", arguments: { snapshotId: "synthetic:
 const call = (id: string, name = "act_and_observe", args: unknown = actionArgs) => ({
   id, type: "function", function: { name, arguments: JSON.stringify(args) },
 });
-const tree = (id: string, text: string) => ({ snapshotId: id, revision: 1, truncated: false, nodes: [
+const tree = (id: string, text: string) => ({ snapshotId: id, packageName: "synthetic.fixture", windowId: 4, revision: 1, truncated: false, nodes: [
   { nodeId: "n1", text, clickable: true, enabled: true, bounds: [0, 0, 100, 100] },
 ] });
 const results = (body: Json): Json[] => body.messages.filter((message: Json) => message.role === "tool").map((message: Json) => JSON.parse(message.content));
@@ -77,10 +77,11 @@ test("invalid JSON, non-object and nested schema arguments can be corrected once
       return {};
     });
     assert.equal(result.status, "completed");
-    assert.deepEqual(dispatched, [{ name: "get_ui_tree", args: {} }, { name: "act_and_observe", args: actionArgs }]);
+    assert.deepEqual(dispatched, [{ name: "get_ui_tree", args: {} }, { name: "act_and_observe", args: actionArgs }, { name: "get_ui_tree", args: { maxNodes: 500, maxDepth: 40 } }]);
     assert.equal(result.metrics.modelRequests, 3);
-    assert.equal(result.metrics.toolCalls, 2, "Argument feedback is not a phone tool invocation");
-    assert.equal(result.metrics.hostReads, 0);
+    assert.equal(result.metrics.toolCalls, 3, "Argument feedback is not a phone tool invocation; completion performs one final read");
+    assert.equal(result.metrics.hostReads, 1);
+    assert.equal(result.metrics.completionReads, 1);
     assert.deepEqual(events.filter(event => event.type === "model_correction"), [{ type: "model_correction", turn: 1 }]);
     assert.equal(JSON.stringify(events).includes("synthetic-private-argument"), false);
     assert.equal(JSON.stringify(events).includes("Validator diagnostic"), false);
@@ -111,7 +112,7 @@ test("a mixed batch containing a valid action is wholly withheld and every call 
     return {};
   });
   assert.equal(result.status, "completed");
-  assert.deepEqual(dispatched.map(item => item.name), ["get_ui_tree", "act_and_observe"]);
+  assert.deepEqual(dispatched.map(item => item.name), ["get_ui_tree", "act_and_observe", "get_ui_tree"]);
 });
 
 test("unknown tools, malformed envelopes, truncated output and multiple actions remain terminal before correction", async () => {
@@ -159,7 +160,7 @@ test("large reported token usage does not stop valid actions or argument correct
   } : turn === 1 ? { calls: [call("corrected")], tokens: 250_000 } : { tokens: 500_000 });
   assert.equal(result.status, "completed");
   assert.equal(result.metrics.modelRequests, 3);
-  assert.deepEqual(dispatched.map(item => item.name), ["get_ui_tree", "act_and_observe"]);
+  assert.deepEqual(dispatched.map(item => item.name), ["get_ui_tree", "act_and_observe", "get_ui_tree"]);
   assert.equal(events.filter(event => event.type === "model_correction").length, 1);
 });
 
