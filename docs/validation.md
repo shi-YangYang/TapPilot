@@ -2,7 +2,9 @@
 
 ## 深色配色 v0.3.5（2026-10-16）
 
-范围为 S0：双端颜色、深色主题资源及版本标识；布局、业务事件、权限与安全逻辑不变。仅检查 diff，包括桌面白底常量替换、Android 主按钮文字对比、启动/系统栏/对话框配色。未运行测试、build、lint、typecheck、截图或真机操作。源码版本为 0.3.5，Android versionCode 为 8；现有 APK 与 macOS 安装包仍为 0.3.4，需要重新构建才能看到本次配色。
+范围为 S0：双端颜色、深色主题资源及版本标识；布局、业务事件、权限与安全逻辑不变。配色修改时仅检查 diff，包括桌面白底常量替换、Android 主按钮文字对比、启动/系统栏/对话框配色，当时未运行测试或构建。源码提交为 `a269f3e`。
+
+随后按用户明确要求打包：server 编译、desktop 构建与 macOS arm64 打包、Android `:app:assembleDebug` 均一次成功。Plist 确认 Mac 应用版本为 `0.3.5`；SDK `aapt` 确认 APK 为 `versionName 0.3.5`、`versionCode 8`。未追加测试、lint、桌面 typecheck、模拟器、截图或真机安装。产物分别位于 `desktop/release/TapPilot-darwin-arm64/TapPilot.app` 和 `android/app/build/outputs/apk/debug/app-debug.apk`。
 
 ## 黑白布局改版 v0.3.4（2026-10-16）
 
