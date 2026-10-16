@@ -1,0 +1,15 @@
+# Copy into ~/.codex/config.toml and replace absolute paths.
+# Easier: scripts/register-mcp.sh [USB_SERIAL] resolves this machine's paths.
+[mcp_servers.tappilot]
+command = "/absolute/path/to/node"
+args = ["/absolute/path/to/TapPilot/server/dist/index.js"]
+startup_timeout_sec = 15
+tool_timeout_sec = 40
+
+[mcp_servers.tappilot.env]
+ADB_PATH = "/absolute/path/to/Android/sdk/platform-tools/adb"
+# Startup setting: "manual" (default) or "trusted". Reconnect MCP after changing.
+# "trusted" uses the user's continuing authorization without per-action CLI approval.
+TAPPILOT_APPROVAL_MODE = "manual"
+# Required in trusted mode; manual mode may omit to select exactly one USB device.
+# TAPPILOT_SERIAL = "YOUR_USB_SERIAL"

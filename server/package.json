@@ -1,0 +1,24 @@
+{
+  "name": "tappilot-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local ADB accessibility bridge for Codex",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "approve": "node dist/approve.js",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}

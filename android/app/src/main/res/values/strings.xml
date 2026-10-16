@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_description">TapPilot 允许您授权的电脑读取当前界面并点击、输入或滚动。屏幕内容可能包含敏感信息。仅在本机 ADB 调试通道工作；不会保存聊天内容。请在电脑端逐次确认可能发送、删除或支付的操作。可随时打开 TapPilot 紧急停止。</string>
+</resources>
