@@ -25,4 +25,29 @@
         <item name="android:textColorSecondary">#A0A0A0</item>
         <item name="android:colorAccent">#F4F4F4</item>
     </style>
+    <style name="Theme.TapPilot.Light" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFFFF</item>
+        <item name="android:colorBackground">#FFFFFF</item>
+        <item name="android:colorBackgroundFloating">#FFFFFF</item>
+        <item name="android:textColorPrimary">#171717</item>
+        <item name="android:textColorSecondary">#636363</item>
+        <item name="android:textColorHint">#636363</item>
+        <item name="android:colorAccent">#171717</item>
+        <item name="android:colorControlActivated">#171717</item>
+        <item name="android:colorControlNormal">#636363</item>
+        <item name="android:colorButtonNormal">#F8F8F8</item>
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:alertDialogTheme">@style/Theme.TapPilot.Light.Dialog</item>
+    </style>
+    <style name="Theme.TapPilot.Light.Dialog" parent="android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:windowBackground">#FFFFFF</item>
+        <item name="android:colorBackground">#FFFFFF</item>
+        <item name="android:colorBackgroundFloating">#FFFFFF</item>
+        <item name="android:textColorPrimary">#171717</item>
+        <item name="android:textColorSecondary">#636363</item>
+        <item name="android:colorAccent">#171717</item>
+    </style>
 </resources>

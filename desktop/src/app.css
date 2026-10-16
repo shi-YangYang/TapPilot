@@ -17,6 +17,8 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--primary);
 .sidebar-tab:hover { background: var(--surface-raised); }
 .sidebar-indicator { inset: 15px auto auto 0; width: 2px; height: 14px; border-radius: 2px; }
 .sidebar-footer { margin-top: auto; padding: 22px 6px 0; color: var(--muted-foreground); font-size: 10px; }
+#theme-toggle { width: 100%; justify-content: flex-start; gap: 10px; height: 40px; margin-bottom: 20px; padding: 0 10px; border: 1px solid var(--border); border-radius: 9px; color: var(--foreground); font-size: 12px; font-weight: 450; }
+.theme-error { margin: -8px 0 16px; color: var(--destructive); font-size: 11px; line-height: 1.6; }
 .sidebar-footer > div { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .sidebar-footer #version { display: block; margin-top: 12px; padding-left: 18px; font-size: 10px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .workspace { min-height: 100vh; margin-left: var(--sidebar-width); }

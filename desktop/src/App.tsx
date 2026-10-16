@@ -1,4 +1,4 @@
-import { ArrowUpRight, Battery, Bot, Check, ChevronRight, Copy, Layers2, LockKeyhole, Play, RefreshCw, Smartphone, Square, Text, Usb, Wifi } from 'lucide-react';
+import { ArrowUpRight, Battery, Bot, Check, ChevronRight, Copy, Layers2, LockKeyhole, Moon, Play, RefreshCw, Smartphone, Square, Sun, Text, Usb, Wifi } from 'lucide-react';
 import { PromptInput } from '@/components/agents/prompt-input';
 import { AgentActivity, type AgentActivityItem } from '@/components/agents/agent-activity';
 import { Button } from '@/components/motion/button';
@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/ta
 import { Tooltip, TooltipProvider } from '@/components/motion/tooltip';
 import type { ConnectionMode, PageName } from './client-types';
 import { useClient, type ClientController } from './use-client';
+import { useTheme } from './use-theme';
 
 const prompts = [
   { label: '查看电池', icon: Battery, text: '打开系统设置，进入电池页面，告诉我当前显示了什么。' },
@@ -104,12 +105,13 @@ function DevicePage({ client: c }: { client: ClientController }) {
 }
 export function App() {
   const c = useClient();
+  const { theme, themeError, toggleTheme } = useTheme();
   const pages = [{ value: 'task', label: '任务', icon: Layers2 }, { value: 'model', label: '模型', icon: Bot }, { value: 'device', label: '设备', icon: Smartphone }] as const;
   return <TooltipProvider><div className="app-shell"><div className="window-drag" /><Tabs variant="underline" className="app-layout" value={c.page} onValueChange={value => c.setPage(value as PageName)}>
     <aside className="app-sidebar">
       <div className="brand"><span className="brand-mark" aria-hidden="true">T</span>TapPilot</div>
       <TabsList aria-label="主导航" aria-orientation="vertical" className="sidebar-nav" wrapperClassName="sidebar-nav-wrap">{pages.map(({ value, label, icon: Icon }) => <TabsTrigger key={value} value={value} data-page={value} className="sidebar-tab" indicatorClassName="sidebar-indicator"><Icon className="size-4" />{label}</TabsTrigger>)}</TabsList>
-      <div className="sidebar-footer"><div><LockKeyhole className="size-3" /><span>任务记录仅在本次保留</span></div><span id="version">v{c.version}</span></div>
+      <div className="sidebar-footer"><Button id="theme-toggle" variant="ghost" size="sm" onClick={toggleTheme} aria-label={theme === 'dark' ? '切换为浅色主题' : '切换为深色主题'}>{theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}{theme === 'dark' ? '浅色主题' : '深色主题'}</Button>{themeError && <p className="theme-error" role="status">{themeError}</p>}<div><LockKeyhole className="size-3" /><span>任务记录仅在本次保留</span></div><span id="version">v{c.version}</span></div>
     </aside>
     <div className="workspace">
       <header className="workspace-header"><span className="workspace-title">{pages.find(page => page.value === c.page)?.label}</span><div className="workspace-actions"><Button variant="ghost" size="sm" data-goto="device" onClick={() => c.setPage('device')} className="connection-button"><span id="connection-dot" className="connection-dot" data-connected={c.connected} /><span id="connection-label" className="truncate">{c.connected ? `${c.deviceName} · ${c.mode === 'wireless' ? '无线' : 'USB'}` : '连接手机'}</span><ChevronRight className="size-3" /></Button><span className="header-divider" /><Tooltip content="立即停止手机自动化；之后需在手机上恢复。"><Button id="emergency-button" variant="ghost" size="sm" disabled={c.stopping || !c.ready} onClick={() => void c.emergency()}><Square className="size-3" />紧急停止</Button></Tooltip></div></header>

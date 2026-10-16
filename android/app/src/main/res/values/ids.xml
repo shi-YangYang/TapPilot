@@ -1,4 +1,5 @@
 <resources>
+    <item name="theme_toggle" type="id" />
     <item name="task_input" type="id" />
     <item name="task_start" type="id" />
     <item name="model_url" type="id" />

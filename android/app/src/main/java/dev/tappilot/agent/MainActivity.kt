@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
@@ -37,15 +38,16 @@ import com.google.zxing.integration.android.IntentIntegrator
 
 /** Protected local control surface: it cannot be read or operated through TapPilot tools. */
 class MainActivity : Activity() {
-    private val ink = Color.rgb(244, 244, 244)
-    private val muted = Color.rgb(160, 160, 160)
-    private val primary = Color.rgb(244, 244, 244)
-    private val primaryText = Color.rgb(16, 16, 16)
-    private val backgroundColor = Color.rgb(16, 16, 16)
-    private val surface = Color.rgb(24, 24, 24)
-    private val cardSurface = Color.rgb(32, 32, 32)
-    private val border = Color.rgb(48, 48, 48)
-    private val danger = Color.rgb(239, 155, 150)
+    private var darkTheme = true
+    private val ink get() = if (darkTheme) Color.rgb(244, 244, 244) else Color.rgb(23, 23, 23)
+    private val muted get() = if (darkTheme) Color.rgb(160, 160, 160) else Color.rgb(99, 99, 99)
+    private val primary get() = ink
+    private val primaryText get() = if (darkTheme) Color.rgb(16, 16, 16) else Color.WHITE
+    private val backgroundColor get() = if (darkTheme) Color.rgb(16, 16, 16) else Color.WHITE
+    private val surface get() = if (darkTheme) Color.rgb(24, 24, 24) else Color.WHITE
+    private val cardSurface get() = if (darkTheme) Color.rgb(32, 32, 32) else Color.rgb(248, 248, 248)
+    private val border get() = if (darkTheme) Color.rgb(48, 48, 48) else Color.rgb(229, 229, 229)
+    private val danger get() = if (darkTheme) Color.rgb(239, 155, 150) else Color.rgb(156, 67, 61)
     private val worker = Executors.newSingleThreadExecutor()
     private val tabs = mutableListOf<Button>()
     private lateinit var tabIndicator: View
@@ -81,11 +83,18 @@ class MainActivity : Activity() {
     private val wirelessObserver: (WirelessViewState) -> Unit = { renderWireless(it) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        darkTheme = getSharedPreferences("appearance", MODE_PRIVATE).getBoolean("dark_theme", true)
+        setTheme(if (darkTheme) R.style.Theme_TapPilot else R.style.Theme_TapPilot_Light)
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        buildContent()
+        loadSettings()
+    }
+    private fun buildContent() {
+        window.setBackgroundDrawable(ColorDrawable(backgroundColor))
         window.statusBarColor = backgroundColor
         window.navigationBarColor = backgroundColor
-        window.decorView.systemUiVisibility = 0
+        window.decorView.systemUiVisibility = if (darkTheme) 0 else View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         val root = column().apply { setBackgroundColor(backgroundColor); setPadding(dp(24), dp(20), dp(24), dp(16)); isFocusableInTouchMode = true }
         root.setOnApplyWindowInsetsListener { view, insets ->
             view.setPadding(dp(24) + insets.systemWindowInsetLeft, dp(20) + insets.systemWindowInsetTop, dp(24) + insets.systemWindowInsetRight, dp(12) + insets.systemWindowInsetBottom)
@@ -94,6 +103,11 @@ class MainActivity : Activity() {
         val brand = row()
         brand.addView(label("T", 17f, primaryText, true).apply { gravity = Gravity.CENTER; background = rounded(primary, 7); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }, LinearLayout.LayoutParams(dp(28), dp(28)))
         brand.addView(label("TapPilot", 19f, ink, true), LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(9) })
+        brand.addView(button(if (darkTheme) "☀ 浅色" else "☾ 深色", false, action = ::toggleTheme).apply {
+            id = R.id.theme_toggle; textSize = 12f
+            contentDescription = if (darkTheme) "切换为浅色主题" else "切换为深色主题"
+            background = buttonBackground(false, navigation = true)
+        }, LinearLayout.LayoutParams(dp(88), dp(48)))
         root.addView(brand)
         val navigation = row()
         listOf("任务", "模型", "设备").forEachIndexed { index, name ->
@@ -114,8 +128,41 @@ class MainActivity : Activity() {
         root.addView(ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false; clipToPadding = false; addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
         taskPage = buildTaskPage(); modelPage = buildModelPage(); devicePage = buildDevicePage()
         setContentView(root)
-        selectTab(0)
-        loadSettings()
+        selectTab(selectedTab)
+    }
+    private data class InputDraft(val text: String, val start: Int, val end: Int)
+    private fun editableFields() = listOf(task, url, model, key, pairingInput)
+    private fun toggleTheme() {
+        // Drafts live only in this call; changing appearance must not save credentials or restart work.
+        val drafts = editableFields().associate { it.id to InputDraft(it.text.toString(), it.selectionStart, it.selectionEnd) }
+        val focusedId = currentFocus?.id
+        val scrollY = (body.parent as ScrollView).scrollY
+        val modelMessage = modelStatus.text.toString()
+        val taskMessage = result.text.toString()
+        tabSpring?.cancel(); tabSpring = null
+        body.animate().cancel()
+        tabs.clear()
+        darkTheme = !darkTheme
+        getSharedPreferences("appearance", MODE_PRIVATE).edit().putBoolean("dark_theme", darkTheme).apply()
+        setTheme(if (darkTheme) R.style.Theme_TapPilot else R.style.Theme_TapPilot_Light)
+        buildContent()
+        editableFields().forEach { field ->
+            val draft = drafts.getValue(field.id)
+            field.setText(draft.text)
+            field.setSelection(draft.start.coerceIn(0, draft.text.length), draft.end.coerceIn(0, draft.text.length))
+        }
+        modelStatus.text = modelMessage
+        result.text = taskMessage
+        renderState(TaskState.value)
+        renderWireless(WirelessState.value)
+        val newBody = body
+        val focusedField = editableFields().firstOrNull { it.id == focusedId }
+        newBody.post {
+            if (body === newBody && newBody.isAttachedToWindow) {
+                focusedField?.requestFocus()
+                (newBody.parent as ScrollView).scrollTo(0, scrollY)
+            }
+        }
     }
     private fun buildTaskPage() = column().apply {
         addView(pageTitle("新任务"))

@@ -15,7 +15,7 @@ await build({ entryPoints: [path.join(root, 'src/renderer.tsx')], outfile: path.
 const stylesheet = path.join(root, 'src/theme.css');
 const css = await postcss([tailwindcss({ base: root, optimize: true })]).process(await readFile(stylesheet, 'utf8'), { from: stylesheet, to: path.join(root, 'dist/styles.css') });
 await writeFile(path.join(root, 'dist/styles.css'), css.css);
-for (const name of ['index.html', 'preload.cjs']) await copyFile(path.join(root, 'src', name), path.join(root, 'dist', name));
+for (const name of ['index.html', 'preload.cjs', 'theme-init.js']) await copyFile(path.join(root, 'src', name), path.join(root, 'dist', name));
 await copyFile(path.join(root, 'src/beui/LICENSE'), path.join(root, 'dist/beui-LICENSE.txt'));
 await copyFile(path.join(root, 'THIRD_PARTY_NOTICES.md'), path.join(root, 'dist/THIRD_PARTY_NOTICES.md'));
 for (const name of ['Geist-Variable.woff2', 'Geist-LICENSE.txt']) await copyFile(path.join(root, 'src/assets', name), path.join(root, 'dist', name));
