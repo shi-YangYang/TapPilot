@@ -35,6 +35,12 @@ const stepReasons: Record<string, string> = {
   TARGET_AMBIGUOUS: '出现多个相似目标，无法确定',
   PAGE_CONTEXT_CHANGED: '目标所在页面内容已变化',
   TARGET_NOT_ACTIONABLE: '刷新后的目标无法操作',
+  SNAPSHOT_MISSING: '界面记录已失效，需要重新读取',
+  TREE_STRUCTURE_CHANGED: '页面布局已变化',
+  NODE_CONTENT_CHANGED: '页面内容已变化',
+  NODE_BOUNDS_CHANGED: '控件位置已变化',
+  NODE_STATE_CHANGED: '控件状态已变化',
+  NODE_UNAVAILABLE: '控件已不可访问',
 };
 const toolLabel = (event: ClientEvent) => labels[event.action || event.toolName || ''] || '执行手机操作';
 function stepResult(event: ClientEvent): string | undefined {

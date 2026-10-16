@@ -58,6 +58,7 @@ class MainActivity : Activity() {
     private var selectedConnection = 0
     private var manualPairingVisible = false
     private var waitingToConnect = false
+    private lateinit var protectedTouch: ProtectedTouchGuard
     private val wirelessObserver: (WirelessViewState) -> Unit = { renderWireless(it) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,6 +66,7 @@ class MainActivity : Activity() {
         setTheme(if (darkTheme) R.style.Theme_TapPilot else R.style.Theme_TapPilot_Light)
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        protectedTouch = ProtectedTouchGuard.forWindow(window)
         buildContent()
         safe { LegacyModelSettings.remove(this) }
     }
@@ -277,8 +279,7 @@ class MainActivity : Activity() {
     override fun onStop() { WirelessState.remove(wirelessObserver); super.onStop() }
     override fun onResume() { super.onResume(); updateDeviceStatus() }
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (event.flags and (MotionEvent.FLAG_WINDOW_IS_OBSCURED or MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED) != 0) return false
-        return super.dispatchTouchEvent(event)
+        return protectedTouch.dispatch(event) { super.dispatchTouchEvent(it) }
     }
     private fun safe(action: () -> Unit) { try { action() } catch (error: Exception) { toast(if (error is AgentError) error.message else "操作未完成，请稍后重试") } }
     private fun toast(value: String) { Toast.makeText(this, value, Toast.LENGTH_LONG).show() }

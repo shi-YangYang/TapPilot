@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server, type Socket } from "node:net";
 import { once } from "node:events";
 import test from "node:test";
-import { Bridge, requestJson } from "../src/bridge.js";
+import { Bridge, requestJson, staleSnapshotReasons } from "../src/bridge.js";
 import { Adb } from "../src/adb.js";
 import { AgentError } from "../src/errors.js";
 
@@ -34,6 +34,28 @@ test("NDJSON bridge handles fragmented UTF-8, correlated IDs and explicit Androi
   });
   try { assert.deepEqual((await requestJson(f.port, "get_ui_tree", {}, 1000)).result, { text: "电池" }); }
   finally { await f.close(); }
+});
+
+test("NDJSON preserves fixed stale reasons and legacy errors without arbitrary diagnostics", async () => {
+  const errors = [
+    ...staleSnapshotReasons.map(reason => ({ code: "STALE_SNAPSHOT", message: "Synthetic stale", retryable: true, details: { reason } })),
+    { code: "STALE_SNAPSHOT", message: "Synthetic legacy stale", retryable: true },
+  ];
+  for (const error of errors) {
+    const f = await fixture((socket, req) => socket.end(JSON.stringify({ id: req.id, ok: false, error, meta: { durationMs: 0 } }) + "\n"));
+    try { assert.deepEqual((await requestJson(f.port, "get_ui_tree", {}, 1000)).error, error); }
+    finally { await f.close(); }
+  }
+  for (const error of [
+    { code: "STALE_SNAPSHOT", details: { reason: "Synthetic private text" } },
+    { code: "STALE_SNAPSHOT", details: { reason: "NODE_CONTENT_CHANGED", label: "Synthetic private text" } },
+    { code: "STALE_SNAPSHOT", details: { reason: { text: "Synthetic private text" } } },
+    { code: "ACTION_REJECTED", details: { reason: "NODE_CONTENT_CHANGED" } },
+  ]) {
+    const f = await fixture((socket, req) => socket.end(JSON.stringify({ id: req.id, ok: false, error: { message: "Synthetic refusal", retryable: true, ...error }, meta: { durationMs: 0 } }) + "\n"));
+    try { await assert.rejects(requestJson(f.port, "get_ui_tree", {}, 1000), { code: "BRIDGE_PROTOCOL_ERROR" }); }
+    finally { await f.close(); }
+  }
 });
 
 test("NDJSON rejects wrong IDs, invalid schemas and oversized responses", async (t) => {

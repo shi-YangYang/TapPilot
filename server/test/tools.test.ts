@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Adb } from "../src/adb.js";
 import { ApprovalQueue, type ApprovalPrompt } from "../src/approvals.js";
-import type { PhoneBridge } from "../src/bridge.js";
+import { staleSnapshotReasons, type PhoneBridge } from "../src/bridge.js";
 import { ToolController, type ToolName } from "../src/tools.js";
 import { AgentError } from "../src/errors.js";
 import { grant, snapshot } from "./helpers.js";
@@ -170,6 +170,30 @@ test("action failures and uncertain transport outcomes invalidate old references
       assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
     } finally { await controller.close(); }
   });
+});
+
+test("tools preserve only fixed stale reasons from validated phone errors", async () => {
+  for (const reason of [...staleSnapshotReasons, undefined]) {
+    const error = { code: "STALE_SNAPSHOT", message: "Synthetic refusal", retryable: true, ...(reason ? { details: { reason } } : {}) };
+    const bridge: PhoneBridge = { close: async () => {}, call: async () => ({ id: "test", ok: false, error, meta: { durationMs: 0 } }) };
+    const controller = new ToolController(bridge, new Adb(), new UnusedApprovalQueue(), "trusted");
+    try { assert.deepEqual(body(await controller.invoke("get_ui_tree", {})).error, error); }
+    finally { await controller.close(); }
+  }
+  for (const error of [
+    { code: "STALE_SNAPSHOT", details: { reason: "Synthetic private text" } },
+    { code: "STALE_SNAPSHOT", details: { reason: "NODE_CONTENT_CHANGED", label: "Synthetic private text" } },
+    { code: "ACTION_REJECTED", details: { reason: "NODE_CONTENT_CHANGED" } },
+  ]) {
+    const bridge: PhoneBridge = { close: async () => {}, call: async () => ({ id: "test", ok: false, error: { message: "Synthetic refusal", retryable: true, ...error } as any, meta: { durationMs: 0 } }) };
+    const controller = new ToolController(bridge, new Adb(), new UnusedApprovalQueue(), "trusted");
+    try {
+      const result = body(await controller.invoke("get_ui_tree", {}));
+      assert.equal(result.error.code, "BRIDGE_PROTOCOL_ERROR");
+      assert.equal(result.error.details, undefined);
+      assert.equal(JSON.stringify(result).includes("Synthetic private text"), false);
+    } finally { await controller.close(); }
+  }
 });
 
 test("accepted actions retain their result when the observation is absent or invalid, without replay", async (t) => {

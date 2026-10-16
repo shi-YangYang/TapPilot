@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { z } from "zod";
-import type { BridgeResponse, PhoneBridge } from "./bridge.js";
+import { phoneErrorSchema, type BridgeResponse, type PhoneBridge } from "./bridge.js";
 import { AgentError, publicError } from "./errors.js";
 
 const exec = promisify(execFile);
@@ -24,7 +24,7 @@ const helloSchema = z.object({
 }).strict();
 const responseSchema = z.object({
   id: z.string().min(1).max(128), ok: z.boolean(), result: z.unknown().optional(),
-  error: z.object({ code: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/), message: z.string().max(2048), retryable: z.boolean() }).strict().optional(),
+  error: phoneErrorSchema.optional(),
   meta: z.object({ durationMs: z.number().finite().nonnegative() }).strict(),
 }).strict().refine(value => value.ok ? !value.error && "result" in value : !!value.error && !("result" in value));
 

@@ -11,7 +11,13 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-internal class AgentError(val code: String, override val message: String, val retryable: Boolean = false) : RuntimeException(message)
+internal class AgentError(val code: String, override val message: String, val retryable: Boolean = false, val reason: String? = null) : RuntimeException(message) {
+    fun toJson(): JSONObject = JSONObject().put("code", code).put("message", message.take(2048)).put("retryable", retryable).also {
+        if (code == "STALE_SNAPSHOT" && SnapshotStaleReason.entries.any { entry -> entry.name == reason }) {
+            it.put("details", JSONObject().put("reason", reason))
+        }
+    }
+}
 
 /** One bounded UTF-8 JSON request/response per ADB-forwarded Unix-socket connection. */
 internal class RpcServer(private val service: AgentAccessibilityService) : AutoCloseable {
@@ -62,8 +68,7 @@ internal class RpcServer(private val service: AgentAccessibilityService) : AutoC
         } catch (error: Exception) {
             val safe = if (error is AgentError) error else AgentError("INVALID_REQUEST", "Request could not be processed")
             runCatching {
-                send(socket, JSONObject().put("id", id).put("ok", false).put("error", JSONObject()
-                    .put("code", safe.code).put("message", safe.message).put("retryable", safe.retryable)), started)
+                send(socket, JSONObject().put("id", id).put("ok", false).put("error", safe.toJson()), started)
             }
         } finally {
             clients.remove(socket)

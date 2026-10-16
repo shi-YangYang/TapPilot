@@ -7,12 +7,14 @@ import com.journeyapps.barcodescanner.CaptureActivity
 
 /** QR scanning is a user-only control; never expose a decoded pairing credential on screenshots. */
 class SecureScanActivity : CaptureActivity() {
+    private lateinit var protectedTouch: ProtectedTouchGuard
+
     override fun onCreate(savedInstanceState: Bundle?) {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        protectedTouch = ProtectedTouchGuard.forWindow(window)
         super.onCreate(savedInstanceState)
     }
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (event.flags and (MotionEvent.FLAG_WINDOW_IS_OBSCURED or MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED) != 0) return false
-        return super.dispatchTouchEvent(event)
+        return protectedTouch.dispatch(event) { super.dispatchTouchEvent(it) }
     }
 }

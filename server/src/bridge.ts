@@ -5,9 +5,18 @@ import { Adb } from "./adb.js";
 import { AgentError, publicError } from "./errors.js";
 
 const MAX_FRAME_BYTES = 4 * 1024 * 1024;
+// Fixed diagnostics only: never transport node labels, fingerprints or arbitrary details.
+export const staleSnapshotReasons = [
+  "SNAPSHOT_MISSING", "WINDOW_CHANGED", "TREE_INCOMPLETE", "TREE_STRUCTURE_CHANGED",
+  "NODE_CONTENT_CHANGED", "NODE_BOUNDS_CHANGED", "NODE_STATE_CHANGED", "NODE_UNAVAILABLE",
+] as const;
+export const phoneErrorSchema = z.object({
+  code: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/), message: z.string().max(2048), retryable: z.boolean(),
+  details: z.object({ reason: z.enum(staleSnapshotReasons) }).strict().optional(),
+}).strict().refine(error => error.details === undefined || error.code === "STALE_SNAPSHOT");
 const envelopeSchema = z.object({
   id: z.string().min(1).max(128), ok: z.boolean(), result: z.unknown().optional(),
-  error: z.object({ code: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/), message: z.string().max(2048), retryable: z.boolean() }).optional(),
+  error: phoneErrorSchema.optional(),
   meta: z.object({ durationMs: z.number().finite().nonnegative() }),
 }).strict().refine((v) => v.ok ? !v.error && "result" in v : !!v.error && !("result" in v));
 
@@ -15,7 +24,7 @@ export interface BridgeResponse {
   id: string;
   ok: boolean;
   result?: unknown;
-  error?: { code: string; message: string; retryable: boolean };
+  error?: z.infer<typeof phoneErrorSchema>;
   meta: { durationMs: number };
 }
 

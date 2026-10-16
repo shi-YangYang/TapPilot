@@ -130,6 +130,11 @@ test("error projection retains only known action rejection reasons and drops arb
     assert.deepEqual(projectToolResult({ ok: false, error: { ...changed, details: { reason, label: "Synthetic private text", originalError: { message: "Synthetic private text" } } } }),
       { ok: false, error: { ...changed, details: { reason } } });
   }
+  for (const reason of ["SNAPSHOT_MISSING", "WINDOW_CHANGED", "TREE_INCOMPLETE", "TREE_STRUCTURE_CHANGED", "NODE_CONTENT_CHANGED", "NODE_BOUNDS_CHANGED", "NODE_STATE_CHANGED", "NODE_UNAVAILABLE"]) {
+    const stale = { code: "STALE_SNAPSHOT", message: "Synthetic stale", retryable: true };
+    assert.deepEqual(projectToolResult({ ok: false, error: { ...stale, details: { reason, label: "Synthetic private text" } } }),
+      { ok: false, error: { ...stale, details: { reason } } });
+  }
 });
 
 test("synthetic large tree has substantially smaller model payload with every meaningful label retained", t => {

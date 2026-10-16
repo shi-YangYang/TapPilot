@@ -5,6 +5,7 @@ import type { TLSSocket } from "node:tls";
 import test from "node:test";
 import WebSocket from "ws";
 import { AgentError } from "../src/errors.js";
+import { staleSnapshotReasons } from "../src/bridge.js";
 import { WirelessHub, listLANAddresses } from "../src/wireless.js";
 
 type Json = Record<string, unknown>;
@@ -53,6 +54,42 @@ async function phone(hub: WirelessHub, id = "synthetic-phone"): Promise<WebSocke
 
 const reply = (socket: WebSocket, id: unknown, result: unknown = { synthetic: true }) => socket.send(JSON.stringify({ id, ok: true, result, meta: { durationMs: 2 } }));
 const stopPhone = async (socket: WebSocket) => { const closed = once(socket, "close"); socket.terminate(); await closed; };
+
+test("wireless preserves fixed stale reasons and legacy errors without arbitrary diagnostics", async () => {
+  const hub = await WirelessHub.start({ host: "127.0.0.1" });
+  try {
+    const socket = await phone(hub);
+    const bridge = hub.createBridge();
+    for (const error of [
+      ...staleSnapshotReasons.map(reason => ({ code: "STALE_SNAPSHOT", message: "Synthetic stale", retryable: true, details: { reason } })),
+      { code: "STALE_SNAPSHOT", message: "Synthetic legacy stale", retryable: true },
+    ]) {
+      const next = receive(socket);
+      const pending = bridge.call("get_ui_tree");
+      socket.send(JSON.stringify({ id: (await next).id, ok: false, error, meta: { durationMs: 0 } }));
+      assert.deepEqual((await pending).error, error);
+    }
+    await bridge.close();
+    await stopPhone(socket);
+    if (hub.status().connected) await new Promise<void>(resolve => setImmediate(resolve));
+    for (const error of [
+      { code: "STALE_SNAPSHOT", details: { reason: "Synthetic private text" } },
+      { code: "STALE_SNAPSHOT", details: { reason: "NODE_CONTENT_CHANGED", label: "Synthetic private text" } },
+      { code: "STALE_SNAPSHOT", details: { reason: { text: "Synthetic private text" } } },
+      { code: "ACTION_REJECTED", details: { reason: "NODE_CONTENT_CHANGED" } },
+    ]) {
+      const peer = await phone(hub);
+      const invalidBridge = hub.createBridge();
+      const next = receive(peer);
+      const pending = invalidBridge.call("get_ui_tree");
+      const rejected = assert.rejects(pending, { code: "WIRELESS_PROTOCOL_ERROR" });
+      peer.send(JSON.stringify({ id: (await next).id, ok: false, error: { message: "Synthetic refusal", retryable: true, ...error }, meta: { durationMs: 0 } }));
+      await rejected;
+      await invalidBridge.close();
+      assert.equal(hub.status().connected, false);
+    }
+  } finally { await hub.close(); }
+});
 
 test("a pinned WSS phone pairs and serves strict RPC over one reusable connection", async () => {
   const states: unknown[] = [];

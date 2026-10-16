@@ -16,6 +16,8 @@
 | 中途遇到保护、急停、连接失效、手势结果未知 | 停止后续操作，不重放可能已发生的动作 | `runtime`、`runtime-host-refresh` |
 | 换节点、读取设备信息、刷新 ID 后继续失败 | 连续 3 次可信的执行前拒绝即停止；只有动作和完整观察确认进展才重置 | `runtime-recovery-policy` |
 | 快照真实失效 | 最多补读一次，再由下一轮选择；不自动重发刚才动作 | `runtime-host-refresh`、`runtime-client-integration` |
+| 手机连续拒绝过期快照，刷新后内容与 ID 持续变化 | 与电脑拒绝共享连续 3 次上限；前两次只读恢复，第三次停止；已接受动作的观察错误不算拒绝 | `runtime-recovery-policy` |
+| 手机最后复核发现内容、位置、状态或结构变化 | 流式比较完整树并尽早拒绝，保留路径、完整性与指纹校验；固定原因经 USB/无线到达桌面 | Android `SnapshotValidationTest`、`bridge`、`wireless`、`tools`、`ui-projection` |
 | 动作拒绝后模型直接结束 | 保留模型说明，但显示未完成；局部匹配、元数据和补读不能消除未恢复的动作失败 | `runtime-completion-evidence` |
 | 前台元数据与先前界面不一致 | 同时清除完成依据和模型上下文中的旧界面；匹配时保留 | `runtime-completion-evidence` |
 | 模型回答期间切换应用、窗口或服务会话 | 结束前只读核对一次，不增加模型轮次；变化或读取失败不能标记完成 | `runtime-completion-evidence` |

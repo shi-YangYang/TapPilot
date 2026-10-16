@@ -114,6 +114,69 @@ test("fresh changed observations attached to refused actions cannot reset the cr
   assert.equal(result.metrics.modelRequests, 3);
 });
 
+test("phone-side refusals stop after three attempts despite changing handles and refreshed page content", async () => {
+  for (const code of ["STALE_SNAPSHOT", "NO_KNOWN_SNAPSHOT", "READ_REQUIRED", "TARGET_CHANGED", "NODE_NOT_ACTIONABLE"]) {
+    let reads = 0;
+    let actions = 0;
+    const { result } = await scenario([tap(1), tap(2), tap(3), tap(4)], async name => {
+      if (name === "get_ui_tree") return observed(++reads, `Synthetic live content ${reads}`);
+      actions++;
+      return { ok: false, error: { code } };
+    }, (turn, body) => {
+      if (turn === 0) return;
+      const guidance = results(body).findLast(item => item.hostGuidance)?.hostGuidance;
+      assert.equal(guidance?.code, "PRE_DISPATCH_REFUSAL");
+      assert.match(guidance.message, new RegExp(`${3 - turn} further consecutive action refusals`));
+    });
+    assert.match(result.error!, new RegExp(`ACTION_RECOVERY_EXHAUSTED.*${code}`));
+    assert.equal(actions, 3, "each model action is dispatched at most once; the fourth is never requested");
+    assert.equal(result.metrics.modelRequests, 3);
+    assert.equal(reads, ["STALE_SNAPSHOT", "NO_KNOWN_SNAPSHOT", "READ_REQUIRED"].includes(code) ? 3 : 1,
+      "only the first two refreshable refusals schedule a read");
+  }
+});
+
+test("phone and desktop refusals share one allowance that metadata and reads cannot replenish", async () => {
+  let reads = 0;
+  let actions = 0;
+  const { result } = await scenario([tap(1), { name: "get_device_info" }, tap(2), read, tap(3)], async name => {
+    if (name === "get_ui_tree") return observed(++reads, `Synthetic dynamic page ${reads}`);
+    if (name === "get_device_info") return { ok: true, result: { connected: true } };
+    actions++;
+    return actions === 2 ? changedRefusal(10, "Synthetic updated target") : { ok: false, error: { code: "STALE_SNAPSHOT" } };
+  });
+  assert.match(result.error!, /ACTION_RECOVERY_EXHAUSTED.*STALE_SNAPSHOT/);
+  assert.equal(actions, 3);
+  assert.equal(reads, 3);
+  assert.equal(result.metrics.modelRequests, 5);
+});
+
+test("accepted actions with later confirmed progress replenish phone-side refusal allowance", async () => {
+  let reads = 0;
+  let actions = 0;
+  const { result } = await scenario([tap(1), tap(2), tap(3), tap(4), tap(5), tap(6)], async name => {
+    if (name === "get_ui_tree") return observed(++reads, `Synthetic observed page ${reads}`);
+    actions++;
+    return actions % 3 === 0 ? accepted(actions + 100, `Synthetic destination ${actions}`) : { ok: false, error: { code: "STALE_SNAPSHOT" } };
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(actions, 6);
+  assert.equal(result.metrics.hostReads, 5, "four refusal recovery reads and one completion read");
+});
+
+test("stale observation errors after accepted actions are refreshed without counting as rejected actions", async () => {
+  let reads = 0;
+  let actions = 0;
+  const { result } = await scenario([tap(1), tap(2), tap(3)], async name => {
+    if (name === "get_ui_tree") return observed(++reads, `Synthetic loaded page ${reads}`);
+    actions++;
+    return { ok: true, result: { action: { accepted: true }, observation: null, observationError: { code: "STALE_SNAPSHOT" } } };
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(actions, 3, "accepted actions must never be replayed by recovery");
+  assert.equal(result.metrics.hostReads, 4, "three post-action reads and one completion read");
+});
+
 test("accepted but ineffective navigation and refreshed node handles do not replenish refused attempts", async () => {
   let actions = 0;
   let reads = 0;

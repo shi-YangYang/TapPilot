@@ -43,6 +43,7 @@ function safeMessage(error) {
     CONFIRMATION_REQUIRED: '该操作需要独立确认，已停止执行。请查看项目批准说明。',
     NO_DEVICE: '没有发现可用 USB 手机。请检查设备页的连接说明。',
     DEVICE_NOT_FOUND: '未找到选择的手机，请重新连接并刷新设备。',
+    DEVICE_UNAVAILABLE: 'USB 手机离线或未授权。请解锁手机并允许 USB 调试，再重新开始任务；没有授权弹窗时，请重新插拔数据线。',
     EMERGENCY_STOPPED: '手机处于急停状态，请在手机 TapPilot 中手动恢复。',
     SERVICE_NOT_CONNECTED: '手机无障碍服务尚未连接，请在手机中开启 TapPilot。',
     WIRELESS_DISCONNECTED: '无线手机已断开。请重新连接后开始新任务，旧动作不会自动重放。',

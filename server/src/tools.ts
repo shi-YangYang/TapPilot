@@ -3,7 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { Adb } from "./adb.js";
 import { ApprovalQueue } from "./approvals.js";
-import type { PhoneBridge } from "./bridge.js";
+import { phoneErrorSchema, type PhoneBridge } from "./bridge.js";
 import { AgentError, publicError } from "./errors.js";
 import type { ApprovalMode } from "./config.js";
 
@@ -101,7 +101,11 @@ export class ToolController {
       if (this.stopped) throw new AgentError("EMERGENCY_STOPPED", "Host emergency stop is latched; pending action was not dispatched.");
     } : undefined;
     const response = await this.bridge.call(method, params, timeoutMs, guard);
-    if (!response.ok) throw new AgentError(response.error!.code, response.error!.message, response.error!.retryable);
+    if (!response.ok) {
+      const error = phoneErrorSchema.safeParse(response.error);
+      if (!error.success) throw new AgentError("BRIDGE_PROTOCOL_ERROR", "Phone returned invalid error diagnostics.");
+      throw new AgentError(error.data.code, error.data.message, error.data.retryable, error.data.details);
+    }
     return response.result;
   }
 
