@@ -72,7 +72,7 @@ test("progress guard blocks a third mutation despite new snapshot IDs and wait d
   const initial = events.find(event => event.type === "tool_end" && event.turn === 0)!;
   assert.equal("observationChanged" in initial, false);
   assert.equal("action" in initial, false);
-  const actionEvents = events.filter(event => event.type === "tool_start" && event.turn !== 0);
+  const actionEvents = events.filter(event => event.type === "tool_start" && event.toolName === "act_and_observe");
   assert.deepEqual(actionEvents.map(event => event.action), ["click_element", "click_element"]);
   const endings = events.filter(event => event.type === "tool_end" && event.turn !== 0);
   assert.ok(endings.every(event => event.observationChanged === false && event.ok === true));
@@ -96,10 +96,10 @@ test("progress guard does not let changed partial finds clear mutation history",
   assert.ok(events.filter(event => event.type === "tool_end" && event.toolName === "find_element").every(event => !("observationChanged" in event)));
 });
 
-test("progress guard supplies host guidance for accepted unchanged UI and permits a later changed read", async () => {
+test("progress guard preserves the accepted action outcome and supplies a later changed host read", async () => {
   let reads = 0;
   let actions = 0;
-  const { result, events } = await scenario([click(1), read], async name => {
+  const { result, events } = await scenario([click(1)], async name => {
     if (name === "get_ui_tree") return observed(++reads, reads === 2 ? "animation completed" : undefined);
     actions++;
     return { ok: true, result: { action: { accepted: true }, observation: tree(2) } };
@@ -107,15 +107,16 @@ test("progress guard supplies host guidance for accepted unchanged UI and permit
     if (turn !== 1) return;
     const messages = body.messages as Json[];
     const latest = JSON.parse(messages.at(-1)!.content as string);
-    assert.equal(latest.hostGuidance.code, "OBSERVATION_UNCHANGED");
-    assert.match(latest.hostGuidance.message, /Acceptance does not prove/);
-    assert.match(latest.hostGuidance.message, /later fresh observation/);
+    const priorAction = messages.filter(message => message.role === "tool").map(message => JSON.parse(message.content as string)).find(value => value.hostAction);
+    assert.deepEqual(priorAction.hostAction, { action: "click_element", accepted: true, observationChanged: false });
+    assert.equal(latest.hostGuidance, undefined);
+    assert.equal(latest.result.snapshotId, "s2");
     assert.match(messages[0]!.content as string, /stop if it also has no effect/);
   });
   assert.equal(result.status, "completed");
   assert.equal(actions, 1);
   assert.equal(reads, 2);
-  assert.equal(events.find(event => event.type === "tool_end" && event.turn === 2)!.observationChanged, true);
+  assert.equal(events.find(event => event.type === "tool_end" && event.turn === 1 && event.toolName === "get_ui_tree")!.observationChanged, true);
 });
 
 test("progress guard bounds event-only waits even when event revisions and timeout arguments change", async () => {

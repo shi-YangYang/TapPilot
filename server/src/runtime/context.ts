@@ -24,7 +24,7 @@ function hasSnapshot(value: unknown, depth = 0): boolean {
   return typeof obj.snapshotId === "string" || Object.values(obj).some(item => hasSnapshot(item, depth + 1));
 }
 
-function fullObservation(value: unknown, depth = 0): Record<string, unknown> | undefined {
+export function fullObservation(value: unknown, depth = 0): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || depth > 8) return undefined;
   const obj = value as Record<string, unknown>;
   if (typeof obj.snapshotId === "string" && Array.isArray(obj.nodes)) return obj;

@@ -23,7 +23,17 @@ export interface WirelessState {
 export interface UsbDevice { serial: string; state: string; usb: boolean; emulator: boolean; model?: string }
 export interface LanAddress { address: string; name: string }
 export interface PairingResult { status: WirelessState; pairingUri: string; qrDataUrl: string }
-export interface Metrics { totalMs: number; modelMs: number; toolMs: number; modelRequests: number; toolCalls: number }
+export interface Metrics {
+  totalMs: number;
+  modelMs: number;
+  toolMs: number;
+  modelRequests: number;
+  toolCalls: number;
+  modelRequestBytes?: number;
+  modelUiBytes?: number;
+  rawUiBytes?: number;
+  hostReads?: number;
+}
 export interface ClientEvent {
   type: string;
   demo?: boolean;

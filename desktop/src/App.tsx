@@ -28,6 +28,8 @@ function TaskPage({ client: c }: { client: ClientController }) {
   }));
   const finished = c.run.phase !== 'idle' && c.run.phase !== 'running';
   const summary = { idle: '任务进度', running: '正在执行', completed: '已完成', cancelled: '已取消', failed: '未完成' }[c.run.phase];
+  const { modelRequestBytes, modelUiBytes, rawUiBytes, hostReads } = c.run.metrics;
+  const uiReduction = rawUiBytes !== undefined && rawUiBytes > 0 && modelUiBytes !== undefined ? Math.max(0, Math.min(100, Math.round((1 - modelUiBytes / rawUiBytes) * 100))) : undefined;
   return <section id="page-task" className="task-page" data-phase={c.run.phase} hidden={c.page !== 'task'}>
     <div className="page-heading task-heading"><div><p className="section-eyebrow">新任务</p><h1>想让手机做什么？</h1></div><span hidden={c.run.phase === 'idle'}><RunBadge client={c} /></span></div>
     <div id="demo-banner" className="demo-notice" hidden={!c.run.demo}>演示模式 · 模拟数据，不操作手机或调用模型。</div>
@@ -51,7 +53,15 @@ function TaskPage({ client: c }: { client: ClientController }) {
       <AgentActivity items={items} status={c.run.phase === 'running' ? 'working' : 'complete'} duration={c.run.metrics.totalMs / 1000} activeLabel="正在处理任务…" summary={`${summary} · ${(c.run.metrics.totalMs / 1000).toFixed(1)} 秒`} maxHeight={208} />
     </div>}
     <div id="answer-panel" className="task-answer" hidden={!finished}><h2 id="answer-heading">{c.run.demo ? '演示结果 · 合成数据' : '任务结果'}</h2><div id="answer">{c.run.answer}</div></div>
-    {c.run.phase !== 'idle' && <details className="help-details metrics-details"><summary>耗时明细</summary><dl><div><dt>总耗时</dt><dd><span id="metric-total">{(c.run.metrics.totalMs / 1000).toFixed(1)}</span> 秒</dd></div><div><dt>模型思考</dt><dd id="metric-model">{(c.run.metrics.modelMs / 1000).toFixed(1)} 秒</dd></div><div><dt>手机操作</dt><dd id="metric-tool">{(c.run.metrics.toolMs / 1000).toFixed(1)} 秒</dd></div><div><dt>请求 / 工具调用</dt><dd id="metric-rounds">{c.run.metrics.modelRequests} / {c.run.metrics.toolCalls}</dd></div></dl></details>}
+    {c.run.phase !== 'idle' && <details className="help-details metrics-details"><summary>耗时明细</summary><dl>
+      <div><dt>总耗时</dt><dd><span id="metric-total">{(c.run.metrics.totalMs / 1000).toFixed(1)}</span> 秒</dd></div>
+      <div><dt>模型思考</dt><dd id="metric-model">{(c.run.metrics.modelMs / 1000).toFixed(1)} 秒</dd></div>
+      <div><dt>手机操作</dt><dd id="metric-tool">{(c.run.metrics.toolMs / 1000).toFixed(1)} 秒</dd></div>
+      <div><dt>请求 / 工具调用</dt><dd id="metric-rounds">{c.run.metrics.modelRequests} / {c.run.metrics.toolCalls}</dd></div>
+      {modelRequestBytes !== undefined && <div><dt>模型请求数据</dt><dd id="metric-payload">{(modelRequestBytes / 1024).toFixed(1)} KiB</dd></div>}
+      {uiReduction !== undefined && <div><dt>界面数据压缩</dt><dd id="metric-ui-reduction">减少 {uiReduction}% · {((rawUiBytes || 0) / 1024).toFixed(1)} → {((modelUiBytes || 0) / 1024).toFixed(1)} KiB</dd></div>}
+      {hostReads !== undefined && <div><dt>自动观察</dt><dd id="metric-host-reads">{hostReads} 次</dd></div>}
+    </dl></details>}
   </section>;
 }
 function ModelPage({ client: c }: { client: ClientController }) {

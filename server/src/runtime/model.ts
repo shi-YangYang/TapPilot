@@ -1,3 +1,5 @@
+import { projectToolResult } from "./ui-projection.js";
+
 export type ModelConfig = { baseUrl: string; apiKey: string; model: string };
 export type ModelFetch = (input: string, init: RequestInit) => Promise<Response>;
 export type AgentTool = { name: string; description: string; inputSchema: Record<string, unknown> };
@@ -36,12 +38,33 @@ function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Count each UI snapshot once, excluding transport envelopes and historical host facts. */
+function uiBytes(value: unknown): number {
+  if (!object(value)) return Array.isArray(value) ? value.reduce((sum, item) => sum + uiBytes(item), 0) : 0;
+  if (typeof value.snapshotId === "string" && (Array.isArray(value.nodes) || Array.isArray(value.elements))) {
+    return Buffer.byteLength(JSON.stringify(value));
+  }
+  return Object.values(value).reduce<number>((sum, item) => sum + uiBytes(item), 0);
+}
+
 export async function completion(config: ModelConfig, messages: Message[], tools: AgentTool[], signal: AbortSignal, modelFetch: ModelFetch = globalThis.fetch): Promise<{
-  message: Message; tokens: number; requestBytes: number; responseBytes: number;
+  message: Message; tokens: number; requestBytes: number; responseBytes: number; modelUiBytes: number; rawUiBytes: number;
 }> {
   const endpoint = endpointFor(config);
+  let modelUiBytes = 0;
+  let rawUiBytes = 0;
+  // Only the model's view is compacted. Controllers and progress checks keep full snapshots.
+  const modelMessages = messages.map(message => {
+    if (message.role !== "tool" || !message.content) return message;
+    let original: unknown;
+    try { original = JSON.parse(message.content); } catch { return message; }
+    const projected = projectToolResult(original);
+    rawUiBytes += uiBytes(original);
+    modelUiBytes += uiBytes(projected);
+    return { ...message, content: JSON.stringify(projected) };
+  });
   const payload = JSON.stringify({
-    model: config.model.trim(), messages, max_tokens: 2048, stream: false,
+    model: config.model.trim(), messages: modelMessages, max_tokens: 2048, stream: false,
     ...(tools.length ? { tools: tools.map(tool => ({ type: "function", function: {
       name: tool.name, description: tool.description, parameters: tool.inputSchema,
     } })), tool_choice: "auto", parallel_tool_calls: false } : {}),
@@ -115,7 +138,7 @@ export async function completion(config: ModelConfig, messages: Message[], tools
   const usage = object(body.usage) ? body.usage.total_tokens : undefined;
   // Providers may omit usage. The byte estimate is deliberately conservative for Chinese UI text.
   const tokens = typeof usage === "number" && Number.isSafeInteger(usage) && usage >= 0 ? usage : Math.ceil((requestBytes + responseBytes) / 2);
-  return { message, tokens, requestBytes, responseBytes };
+  return { message, tokens, requestBytes, responseBytes, modelUiBytes, rawUiBytes };
 }
 
 export async function testModel(config: ModelConfig, signal: AbortSignal = new AbortController().signal, modelFetch?: ModelFetch): Promise<{ ok: true; model: string; durationMs: number }> {
