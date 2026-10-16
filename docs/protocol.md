@@ -93,7 +93,7 @@ selector 支持 `text`、`textContains`、`resourceId`、`contentDescription`、
 
 每次服务连接有独立 session；UI 事件推动 revision。快照以 session、revision 和本次采集身份关联，返回的节点引用只在所属快照有效，不能将 resourceId、文本、树路径或列表下标视为永久 ID。
 
-节点动作使用调用者刚刚读到的 `snapshotId` 和 `nodeId`。`snapshotId` 格式为服务 UUID 加采集计数，`nodeId` 如 `n0`，仅在该快照内有意义。Android 最多保留四份不可变快照描述，而不是跨请求保留活的 `AccessibilityNodeInfo`。相关事件及被接受的动作都会递增 revision；窗口变化、生命周期变化、已接受动作和急停清空缓存。内容、滚动、文本事件以及手势完成/取消回调暂时保留有界快照，但 revision 不同时必须重新采集同范围的完整树：窗口、包名、节点数量、路径和全部指纹均一致才允许继续，截断或任何差异均返回失效错误。随后仍重新读取根节点并验证目标及可点击祖先；指纹包含勾选、选中和焦点状态。相同标签可能对应多个节点，调用者必须检查匹配项，不能无提示选择第一个。
+节点动作使用调用者刚刚读到的 `snapshotId` 和 `nodeId`。`snapshotId` 格式为服务 UUID 加采集计数，`nodeId` 如 `n0`，仅在该快照内有意义。Android 最多保留四份不可变快照描述，而不是跨请求保留活的 `AccessibilityNodeInfo`。相关事件及被接受的动作都会递增 revision；窗口拓扑变化（`TYPE_WINDOWS_CHANGED`）、生命周期变化、已接受动作和急停清空缓存。从 v0.3.17 起，窗口状态通知（`TYPE_WINDOW_STATE_CHANGED`）与内容/滚动/文本事件以及手势完成/取消回调暂时保留有界快照，但 revision 不同时必须重新采集同范围的完整树：窗口、包名、节点数量、路径和全部指纹均一致才允许继续，截断或任何差异均返回失效错误。随后仍重新读取根节点并验证目标及可点击祖先；指纹包含勾选、选中和焦点状态。相同标签可能对应多个节点，调用者必须检查匹配项，不能无提示选择第一个。
 
 `get_ui_tree` 用精简节点列表和 `parentId` 表示层次。节点携带 `nodeId`、`text`、`contentDescription`、`resourceId`、`className`、`bounds`（屏幕像素 `[left,top,right,bottom]`）、`clickable`、`scrollable`、`editable`、`enabled`、`password`、`visible`；v0.3.16 另提供 `checkable/checked/selected/focused`，明确状态用于目标核对和结果判断。密码文本和描述返回 `[REDACTED]`；普通文字及描述各最多返回 1000 字符；ID、类型、包名及 Activity 提示等输出字符串有 512 字符上限。节点数、遍历深度、访问预算或序列化体积耗尽时，顶层 `truncated:true`，即使 `maxNodes:500` 也不保证可返回 500 个节点；单字段字符上限不单独标记，因此长文本也不能视为完整内容。
 

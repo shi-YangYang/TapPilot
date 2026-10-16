@@ -185,6 +185,60 @@ test("partial or unmarked failed-action observations cannot become current decis
   }
 });
 
+test("a verified local tap refusal retains the same UI and specific reason without extra reads", async () => {
+  const calls: string[] = [];
+  const { result, events } = await scenario((turn, body) => {
+    assertValidToolPairs(body);
+    if (turn === 0) return [{ name: "act_and_observe", args: { ...action().args, action: "tap_element" } }];
+    const latest = toolResults(body).at(-1)!;
+    assert.equal(latest.observation.snapshotId, "initial");
+    assert.equal(latest.error.details.reason, "NO_CLICKABLE_TARGET");
+    assert.equal(latest.hostAction, undefined, "a local refusal is not an accepted action");
+    assert.equal(advertised(body).includes("get_ui_tree"), false);
+    assert.equal(advertised(body).includes("find_element"), false);
+    return undefined;
+  }, async name => {
+    calls.push(name);
+    return name === "get_ui_tree" ? observed("initial") : {
+      ok: false, error: { code: "NODE_NOT_ACTIONABLE", details: { reason: "NO_CLICKABLE_TARGET" } },
+      observation: tree("initial"), meta: { localRejection: true },
+    };
+  });
+  assert.equal(result.status, "completed");
+  assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
+  assert.equal(result.metrics.hostReads, 0);
+  assert.equal(events.find(event => event.type === "tool_end" && event.toolName === "act_and_observe")?.errorReason, "NO_CLICKABLE_TARGET");
+});
+
+test("local-refusal evidence must match the held and requested full observation exactly", async () => {
+  for (const condition of ["unmarked", "partial", "new-snapshot", "changed-content", "wrong-request", "wrong-error"]) {
+    const { result } = await scenario((turn, body) => {
+      if (turn === 0) return [action(condition === "wrong-request" ? "older" : "initial")];
+      assert.ok(advertised(body).includes("get_ui_tree"), condition);
+      return undefined;
+    }, async name => name === "get_ui_tree" ? observed("initial") : {
+      ok: false, error: { code: condition === "wrong-error" ? "ACTION_REJECTED" : "NODE_NOT_ACTIONABLE" },
+      observation: { ...tree(condition === "new-snapshot" ? "unseen" : "initial", condition === "changed-content" ? "Changed synthetic page" : undefined), truncated: condition === "partial" },
+      meta: { localRejection: condition !== "unmarked" },
+    });
+    assert.equal(result.status, "failed", condition);
+    assert.match(result.error!, /NO_OBSERVATION/, condition);
+    assert.equal(result.metrics.hostReads, 0);
+  }
+});
+
+test("the identical locally rejected target is blocked before a second executor call", async () => {
+  let actions = 0;
+  const { result } = await scenario(() => [action()], async name => {
+    if (name === "get_ui_tree") return observed("initial");
+    actions++;
+    return { ok: false, error: { code: "NODE_NOT_ACTIONABLE" }, observation: tree("initial"), meta: { localRejection: true } };
+  });
+  assert.equal(result.status, "failed");
+  assert.match(result.error!, /REPEATED_ACTION/);
+  assert.equal(actions, 1);
+});
+
 test("interrupted or unconfirmed gestures stop without refreshing or replaying accepted actions", async () => {
   for (const code of ["GESTURE_CANCELLED", "GESTURE_COMPLETION_TIMEOUT"]) {
     const calls: string[] = [];

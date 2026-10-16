@@ -10,8 +10,8 @@ android {
         applicationId = "dev.tappilot.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
-        versionName = "0.3.16"
+        versionCode = 20
+        versionName = "0.3.17"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions {

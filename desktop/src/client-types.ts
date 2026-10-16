@@ -44,6 +44,7 @@ export interface ClientEvent {
   action?: string;
   ok?: boolean;
   errorCode?: string;
+  errorReason?: string;
   observationChanged?: boolean;
   durationMs?: number;
   status?: 'completed' | 'cancelled' | 'failed';

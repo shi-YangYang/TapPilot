@@ -198,6 +198,7 @@ test("unknown action outcome never returns preflight UI as post-action evidence 
     const result = await h.act();
     assert.equal((result.error as Json).code, "TIMEOUT");
     assert.equal(result.observation, undefined);
+    assert.equal((result.meta as Json).localRejection, undefined);
     assert.equal((result.meta as Json).preflightRead, true);
     assert.equal(((await h.act()).error as Json).code, "NO_KNOWN_SNAPSHOT");
     assert.deepEqual(h.calls.map((call) => call.method), ["get_ui_tree", "get_ui_tree", "act_and_observe"]);
@@ -209,6 +210,7 @@ test("preflight read failure does not send an action or attach an older observat
   assert.equal((actual.result.error as Json).code, "PHONE_DISCONNECTED");
   assert.equal(actual.result.observation, undefined);
   assert.equal((actual.result.meta as Json).preflightRead, true);
+  assert.equal((actual.result.meta as Json).localRejection, undefined);
   assert.deepEqual(actual.calls.map((call) => call.method), ["get_ui_tree", "get_ui_tree"]);
 });
 
@@ -229,6 +231,7 @@ test("cancellation, emergency stop and close during preflight prevent the action
       const result = await pending;
       assert.equal((result.error as Json).code, operation === "cancel" ? "CANCELLED" : operation === "stop" ? "EMERGENCY_STOPPED" : "CLIENT_CLOSED");
       assert.equal(result.observation, undefined);
+      assert.equal((result.meta as Json)?.localRejection, undefined);
       assert.ok(!h.calls.some((call) => call.method === "act_and_observe"));
     } finally { await h.client.close(); }
   }

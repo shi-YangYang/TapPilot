@@ -75,10 +75,23 @@ const scalarFields = [
   "superseded", "note", "observationChanged",
 ] as const;
 
+const actionRejectionReasons = new Set([
+  "INCOMPLETE_TREE", "INVALID_HIERARCHY", "TARGET_DISABLED", "TARGET_HIDDEN", "SENSITIVE_TARGET",
+  "NO_CLICKABLE_TARGET", "HIDDEN_ANCESTOR", "INVALID_BOUNDS", "TARGET_CLIPPED",
+  "AMBIGUOUS_TOUCH_TARGET", "TOUCH_TARGET_MISMATCH",
+]);
+
+/** Fixed host diagnostics only; arbitrary error details can contain phone UI data. */
+export function actionRejectionReason(value: unknown): string | undefined {
+  return typeof value === "string" && actionRejectionReasons.has(value) ? value : undefined;
+}
+
 function projectError(value: unknown): Json | undefined {
   if (!isObject(value)) return undefined;
   const result: Json = {};
   for (const key of ["code", "message", "retryable"]) if (["string", "boolean"].includes(typeof value[key])) result[key] = value[key];
+  const reason = isObject(value.details) ? actionRejectionReason(value.details.reason) : undefined;
+  if (reason) result.details = { reason };
   return result;
 }
 

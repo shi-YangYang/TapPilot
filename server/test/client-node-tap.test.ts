@@ -13,7 +13,7 @@ const root = node("root", [0, 0, 400, 600], { parentId: null });
 const button = node("button", [20, 20, 120, 120], { clickable: true, text: "工具" });
 const target = { snapshotId: snapshot.snapshotId, nodeId: button.nodeId };
 function success(result: unknown) { return { id: "synthetic", ok: true, result, meta: { durationMs: 1 } }; }
-function harness(options: { nodes?: Json[]; truncated?: boolean; partial?: boolean; actionResult?: Json; phoneError?: string; prepare?: () => Promise<void> } = {}) {
+function harness(options: { nodes?: Json[]; truncated?: boolean; partial?: boolean; actionResult?: Json; phoneError?: string; spoofLocalRejection?: boolean; prepare?: () => Promise<void> } = {}) {
   const full = { ...snapshot, nodes: options.nodes ?? [root, button], truncated: options.truncated ?? false };
   const observed = options.partial ? { ...full, nodes: undefined, elements: full.nodes } : full;
   const calls: { method: string; args: Json }[] = [];
@@ -21,7 +21,7 @@ function harness(options: { nodes?: Json[]; truncated?: boolean; partial?: boole
     if (method === "act_and_observe") await options.prepare?.();
     gate?.(); calls.push({ method, args });
     if (method === "get_ui_tree") return success(observed);
-    if (options.phoneError && method === "act_and_observe") return { id: "synthetic", ok: false, error: { code: options.phoneError, message: "Synthetic phone rejection", retryable: false }, meta: { durationMs: 1 } };
+    if (options.phoneError && method === "act_and_observe") return { id: "synthetic", ok: false, error: { code: options.phoneError, message: "Synthetic phone rejection", retryable: false }, meta: { durationMs: 1, ...(options.spoofLocalRejection ? { localRejection: true } : {}) } };
     return success(options.actionResult ?? { action: { accepted: true, action: "swipe", completion: "pending" }, observation: { ...full, snapshotId: "session:2", revision: 2 } });
   } };
   const client = createPhoneClient(bridge, new Adb());
@@ -109,10 +109,47 @@ test("ordinary tap excludes unrelated sensitive siblings but checks intended des
 });
 
 test("partial, truncated and stale snapshots cannot authorize a node touch", async () => {
-  blocked(await attempt({ partial: true }), "NODE_NOT_ACTIONABLE");
-  blocked(await attempt({ truncated: true }), "NODE_NOT_ACTIONABLE");
-  blocked(await attempt({}, { ...target, snapshotId: "session:old" }), "STALE_SNAPSHOT");
+  for (const options of [{ partial: true }, { truncated: true }]) {
+    const actual = await attempt(options);
+    blocked(actual, "READ_REQUIRED");
+    assert.equal((actual.result.error as Json).details.reason, "INCOMPLETE_TREE");
+    assert.equal((actual.result.meta as Json).localRejection, true);
+    assert.equal(actual.result.observation, undefined, "partial evidence cannot masquerade as a full retained observation");
+  }
+  const stale = await attempt({}, { ...target, snapshotId: "session:old" });
+  blocked(stale, "STALE_SNAPSHOT");
+  assert.equal(stale.result.observation, undefined, "a local failure cannot attach a mismatched snapshot");
   blocked(await attempt({}, { ...target, nodeId: "missing" }), "NODE_NOT_FOUND");
+});
+
+test("local tap refusal retains matching complete evidence with a fixed actionable reason", async () => {
+  const noClick = await attempt({ nodes: [root, { ...button, clickable: false }] });
+  blocked(noClick, "NODE_NOT_ACTIONABLE");
+  assert.equal((noClick.result.error as Json).details.reason, "NO_CLICKABLE_TARGET");
+  assert.equal((noClick.result.meta as Json).localRejection, true);
+  assert.equal((noClick.result.observation as Json).snapshotId, target.snapshotId);
+  assert.equal((noClick.result.observation as Json).truncated, false);
+  assert.match((noClick.result.error as Json).message, /do not repeat this target/);
+  for (const [nodes, reason] of [
+    [[root, { ...button, enabled: false }], "TARGET_DISABLED"],
+    [[root, { ...button, visible: false }], "TARGET_HIDDEN"],
+    [[{ ...root, visible: false }, button], "HIDDEN_ANCESTOR"],
+    [[root, { ...button, password: true }], "SENSITIVE_TARGET"],
+    [[root, { ...button, bounds: [20, 20, 20, 120] }], "INVALID_BOUNDS"],
+    [[root, { ...button, bounds: [410, 20, 510, 120] }], "TARGET_CLIPPED"],
+    [[root, button, node("overlap", [30, 30, 130, 130], { clickable: true })], "AMBIGUOUS_TOUCH_TARGET"],
+    [[root, button, node("deeper", [30, 30, 130, 130], { parentId: button.nodeId, clickable: true })], "TOUCH_TARGET_MISMATCH"],
+  ] as [Json[], string][]) {
+    const actual = await attempt({ nodes });
+    blocked(actual, "NODE_NOT_ACTIONABLE");
+    assert.deepEqual((actual.result.error as Json).details, { reason });
+    assert.equal((actual.result.meta as Json).localRejection, true);
+    assert.equal((actual.result.observation as Json).snapshotId, target.snapshotId);
+  }
+  const broken = await attempt({ nodes: [root, { ...button, parentId: "missing" }] });
+  blocked(broken, "NODE_NOT_ACTIONABLE");
+  assert.equal((broken.result.error as Json).details.reason, "INVALID_HIERARCHY");
+  assert.equal(broken.result.observation, undefined, "broken hierarchy is not complete retained evidence");
 });
 
 test("disabled, hidden, password and malformed geometry targets are rejected", async () => {
@@ -140,11 +177,13 @@ test("nested node arguments reject coordinates, unknown fields and invalid ident
 });
 
 test("Android stale and action rejection errors propagate unchanged with no automatic retry", async () => {
-  for (const code of ["STALE_SNAPSHOT", "ACTION_REJECTED", "PROTECTED_APP"]) {
-    const actual = await attempt({ phoneError: code });
+  for (const code of ["STALE_SNAPSHOT", "ACTION_REJECTED", "PROTECTED_APP", "NODE_NOT_ACTIONABLE"]) {
+    const actual = await attempt({ phoneError: code, spoofLocalRejection: true });
     assert.equal(actual.result.ok, false);
     assert.equal((actual.result.error as Json).code, code);
     assert.deepEqual(actual.calls.map((call) => call.method), ["get_ui_tree", "act_and_observe"]);
+    assert.equal((actual.result.meta as Json)?.localRejection, undefined, "phone failures cannot supply host-only validation evidence");
+    assert.equal(actual.result.observation, undefined);
   }
 });
 
@@ -175,7 +214,10 @@ test("cancellation and emergency stop during preparation gate the translated tou
       if (stop) await h.client.execute("emergency_stop", {}, abort.signal);
       else abort.abort();
       release();
-      assert.equal(((await pending).error as Json).code, stop ? "EMERGENCY_STOPPED" : "CANCELLED");
+      const result = await pending;
+      assert.equal((result.error as Json).code, stop ? "EMERGENCY_STOPPED" : "CANCELLED");
+      assert.equal((result.meta as Json)?.localRejection, undefined);
+      assert.equal(result.observation, undefined);
       assert.deepEqual(h.calls.map((call) => call.method), stop ? ["get_ui_tree", "emergency_stop"] : ["get_ui_tree"]);
     } finally { await h.client.close(); }
   }

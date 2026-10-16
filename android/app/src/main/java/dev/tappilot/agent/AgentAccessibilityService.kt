@@ -99,10 +99,11 @@ class AgentAccessibilityService : AccessibilityService() {
             activityHint = event.className?.toString()
             hintPackage = event.packageName?.toString()
         }
-        // Content notifications can arrive even when the accessible tree is unchanged.
-        // Keep bounded snapshots for full-tree revalidation; window changes still invalidate.
-        advanceRevision(invalidateSnapshots = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-            event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED)
+        // State notifications can be delayed or repeat for the same active tree.
+        // Retain bounded snapshots for full-tree revalidation after those events.
+        // A window-topology event can add a touch-intercepting overlay without changing
+        // the active root, so it still invalidates all cached coordinate references.
+        advanceRevision(invalidateSnapshots = event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED)
     }
 
     override fun onInterrupt() { runCatching { stopAutomation() } }

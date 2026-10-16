@@ -16,9 +16,25 @@ const stepErrors: Record<string, string> = {
   COMMAND_TIMEOUT: '操作超时，请确认手机状态', WIRELESS_TIMEOUT: '连接超时，请确认手机状态', BRIDGE_TIMEOUT: '连接超时，请确认手机状态',
   INVALID_ARGUMENT: '操作参数无效', NOT_IMPLEMENTED: '暂不支持此操作', CANCELLED: '已取消',
 };
+const stepReasons: Record<string, string> = {
+  INCOMPLETE_TREE: '界面信息不完整，需要重新读取',
+  INVALID_HIERARCHY: '目标层级不完整，无法确认位置',
+  TARGET_DISABLED: '目标已禁用',
+  TARGET_HIDDEN: '目标当前不可见',
+  SENSITIVE_TARGET: '此目标需手动操作',
+  NO_CLICKABLE_TARGET: '目标及上层控件均不可点击',
+  HIDDEN_ANCESTOR: '目标所在区域不可见',
+  INVALID_BOUNDS: '目标没有有效触控区域',
+  TARGET_CLIPPED: '目标超出可见区域',
+  AMBIGUOUS_TOUCH_TARGET: '触控区域重叠，无法确定目标',
+  TOUCH_TARGET_MISMATCH: '触控位置与目标不一致',
+};
 const toolLabel = (event: ClientEvent) => labels[event.action || event.toolName || ''] || '执行手机操作';
 function stepResult(event: ClientEvent): string | undefined {
-  if (event.ok === false) return event.errorCode ? `${stepErrors[event.errorCode] || '操作失败'} (${event.errorCode})` : '操作失败';
+  if (event.ok === false) {
+    const reason = event.errorReason && Object.hasOwn(stepReasons, event.errorReason) ? stepReasons[event.errorReason] : undefined;
+    return event.errorCode ? `${reason || stepErrors[event.errorCode] || '操作失败'} (${event.errorCode})` : reason || '操作失败';
+  }
   if (event.observationChanged === false) return '界面未变化';
   return undefined;
 }

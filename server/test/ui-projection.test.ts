@@ -118,6 +118,15 @@ test("tool envelopes retain host outcomes and errors while omitting telemetry, u
     { ok: false, superseded: true, note: "Earlier observation removed.", error: { code: "STALE_SNAPSHOT", message: "Read again", retryable: true } });
 });
 
+test("error projection retains only known action rejection reasons and drops arbitrary details", () => {
+  const error = { code: "NODE_NOT_ACTIONABLE", message: "Target cannot be touched", retryable: false };
+  assert.deepEqual(projectToolResult({ ok: false, error: { ...error, details: { reason: "AMBIGUOUS_TOUCH_TARGET", label: "Synthetic private text" } } }),
+    { ok: false, error: { ...error, details: { reason: "AMBIGUOUS_TOUCH_TARGET" } } });
+  for (const details of [{ reason: "Synthetic private text" }, { reason: { text: "Synthetic private text" } }, ["TARGET_HIDDEN"], null]) {
+    assert.deepEqual(projectToolResult({ ok: false, error: { ...error, details } }), { ok: false, error });
+  }
+});
+
 test("synthetic large tree has substantially smaller model payload with every meaningful label retained", t => {
   const nodes = [node("root", null, { className: "android.widget.FrameLayout" })];
   for (let i = 0; i < 60; i++) {
