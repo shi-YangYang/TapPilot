@@ -2,7 +2,9 @@
 
 ## 页面精简 v0.3.1（2026-10-16）
 
-仅修改双端页面文案、静态排版、版本标识及对应说明，按 S0 检查 diff；未运行测试、build、lint 或 typecheck。操作逻辑及控件 ID 保留。此次提交更新源码，未重新生成 APK 或 macOS 安装包；现有本地产物仍为 v0.3.0。
+页面修改仅涉及双端文案、静态排版、版本标识及对应说明，按 S0 检查 diff，未运行测试或构建。操作逻辑及控件 ID 保留，源码提交为 `ed16a92`。
+
+随后按用户明确要求完成 v0.3.1 打包：server 编译、desktop 构建及 macOS arm64 打包、Android `:app:assembleDebug` 均成功。macOS 包的 `CFBundleShortVersionString` 为 `0.3.1`；SDK `aapt` 确认 APK 的 versionName 为 `0.3.1`、versionCode 为 `4`。未追加测试、lint、真机安装或手机操作。产物仍在 README 所列目录。
 
 ## 无线客户端 v0.3（2026-10-16）
 
