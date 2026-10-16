@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TapPilot</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="renderer.js" defer></script>
+</head>
+<body>
+  <div class="titlebar"></div>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">t<span>↗</span></span><div>TapPilot<small>手机，自然听懂你。</small></div></div>
+    <div class="nav-label">工作空间</div>
+    <nav aria-label="主导航">
+      <button class="nav-item active" data-page="task" aria-current="page"><span>✦</span>任务<span class="nav-shortcut">01</span></button>
+      <button class="nav-item" data-page="model"><span>◈</span>模型<span class="nav-shortcut">02</span></button>
+      <button class="nav-item" data-page="device"><span>▯</span>设备<span class="nav-shortcut">03</span></button>
+    </nav>
+    <div class="sidebar-bottom">
+      <button id="emergency-button" class="emergency">■ 紧急停止手机操作</button><p class="emergency-help">急停后须在手机端手动恢复。</p>
+      <div class="local-note"><span class="status-dot"></span>任务记录仅保留在本次会话</div>
+      <div class="sidebar-meta"><span id="version">TapPilot</span><span>DESKTOP</span></div>
+    </div>
+  </aside>
+  <main>
+    <header class="topbar"><div class="breadcrumb">你的工作空间 <span>/</span> <strong id="page-title">任务</strong></div><div class="connection-pill"><span class="status-dot muted" id="connection-dot"></span><span id="connection-label">尚未选择手机</span></div></header>
+    <div id="notice" class="notice" role="status" hidden></div>
+
+    <section id="page-task" class="page">
+      <div class="page-heading"><div><div class="eyebrow">LESS TAPPING. MORE DOING.</div><h1>说出任务，交给手机。</h1><p>连接你的模型，让 TapPilot 理解界面并完成操作。</p></div><span class="heading-art">✳</span></div>
+      <div id="demo-banner" class="demo-banner" hidden>演示模式 · 合成界面与模拟过程，不会操作真实手机或请求模型。</div>
+      <div class="workspace-grid">
+        <div class="main-column">
+          <div class="composer card">
+            <label for="task-input" class="section-label">这次想做什么？</label>
+            <textarea id="task-input" rows="4" maxlength="8000" placeholder="打开系统设置，进入电池页面，告诉我当前显示了什么。"></textarea>
+            <div class="composer-footer"><span id="model-label">先配置一个模型</span><button id="run-button" class="primary">开始任务 <span>↗</span></button></div>
+          </div>
+          <p class="authorization-note">开始即授权执行本次任务。手机界面信息会发送给你配置的模型服务。</p>
+          <div class="suggestions"><button data-prompt="打开系统设置，进入电池页面，告诉我当前显示了什么。">↗ 查看电池信息</button><button data-prompt="读取当前手机界面，简要总结当前可见内容，不进行任何点击。">↗ 总结当前界面</button><button id="demo-button">◌ 体验演示</button></div>
+
+          <div class="card progress-card">
+            <div class="card-header"><div><span class="section-label">执行过程</span><span id="run-badge" class="badge">待开始</span></div><button id="cancel-button" class="quiet" disabled>取消任务</button></div>
+            <div id="empty-state" class="empty-state"><div class="empty-symbol">↗</div><h3>每一步，都有迹可循</h3><p>观察界面、选择操作、确认结果。<br>开始后会在这里显示执行进度。</p></div>
+            <ol id="timeline" class="timeline" aria-live="polite"></ol>
+            <div id="answer-panel" class="answer-panel" hidden><div class="section-label" id="answer-heading">任务结果</div><div id="answer" class="answer"></div></div>
+          </div>
+        </div>
+        <aside class="details-column">
+          <div class="card phone-card"><div class="section-label">当前设备</div><div class="phone-illustration"><div class="phone-speaker"></div><div class="phone-screen"><span>t↗</span><small id="phone-state">等待连接</small></div></div><h3 id="device-title">连接你的 Android</h3><p id="device-description">在设备页选择已授权的手机，<br>即可开始执行任务。</p><button class="text-button" data-goto="device">管理设备 <span>→</span></button></div>
+          <div class="card metrics-card"><div class="section-label">本次耗时</div><div class="total-time"><span id="metric-total">—</span><small>秒</small></div><div class="metric-row"><span>模型决策</span><strong id="metric-model">—</strong></div><div class="metric-row"><span>手机操作</span><strong id="metric-tool">—</strong></div><div class="metric-row"><span>模型请求 / 工具调用</span><strong id="metric-rounds">—</strong></div></div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="page-model" class="page" hidden>
+      <div class="page-heading"><div><div class="eyebrow">YOUR MODEL. YOUR CHOICE.</div><h1>选择你的智能引擎。</h1><p>支持提供工具调用能力的 OpenAI 兼容接口，也支持本机模型。</p></div><span class="heading-art">◈</span></div>
+      <div class="settings-grid"><form id="model-form" class="card settings-card">
+        <div class="card-header"><span class="section-label">模型连接</span><span class="badge">OPENAI 兼容</span></div>
+        <label for="base-url">API 地址</label><input id="base-url" type="url" placeholder="https://api.example.com/v1" maxlength="2048" autocomplete="off" required><p class="field-hint">使用服务商提供的地址；本机服务可填写 http://localhost:端口/v1。</p>
+        <label for="model-name">模型名称</label><input id="model-name" type="text" placeholder="填写服务商提供的模型 ID" maxlength="200" autocomplete="off" required>
+        <label for="api-key">API Key <span id="key-status" class="subtle">尚未保存</span></label><input id="api-key" type="password" placeholder="输入密钥" maxlength="8192" autocomplete="new-password"><p class="field-hint">通过 macOS 钥匙串加密保存。同一服务地址留空保留密钥；更换域名或端口会清除旧密钥。本机无鉴权服务可留空。</p>
+        <label class="checkbox-row"><input id="clear-key" type="checkbox">清除已保存的密钥</label>
+        <div class="form-actions"><button id="save-model" class="primary" type="submit">保存配置</button><button id="test-model" class="secondary" type="button">测试连接</button></div>
+        <p id="model-test-result" class="inline-result" role="status"></p>
+      </form><div class="settings-notes"><div class="note-number">01 / 独立运行</div><h3>不需要 Codex。</h3><p>TapPilot 自己管理任务循环。模型负责判断，客户端负责执行、验证和停止。</p><div class="note-number">02 / 数据流向</div><h3>由你选择模型服务。</h3><p>任务及必要的手机界面信息会发送到此地址。API Key 只保存在本机，不会回传到界面。</p><div class="note-number">03 / 能力差异</div><h3>连接成功，只是第一步。</h3><p>不同模型的工具调用和界面理解能力不同。先用“读取当前界面”验证实际效果。</p></div></div>
+    </section>
+
+    <section id="page-device" class="page" hidden>
+      <div class="page-heading"><div><div class="eyebrow">ONE PHONE. MANY POSSIBILITIES.</div><h1>让手机准备就绪。</h1><p>选择你的 Android 手机。任务执行期间不会切换到其他设备。</p></div><span class="heading-art">⌁</span></div>
+      <div class="settings-grid"><div><div class="card settings-card"><div class="card-header"><span class="section-label">USB 设备</span><button id="refresh-devices" class="secondary small">刷新设备</button></div><div id="device-list" class="device-list"><p class="subtle">点击刷新以查找已连接的手机。</p></div><label for="adb-path">ADB 路径 <span class="subtle">可选</span></label><input id="adb-path" type="text" placeholder="自动寻找 Android SDK 中的 adb" maxlength="4096"><p class="field-hint">USB 开发通道需要已安装 Android platform-tools。填写完整路径即可自定义。</p><button id="save-device" class="secondary">保存设备设置</button></div><div class="card connection-guide"><div class="section-label">首次连接</div><ol><li><span>1</span><div><strong>安装手机端 TapPilot</strong><p>打开 App，按引导开启无障碍服务。</p></div></li><li><span>2</span><div><strong>授权自动化与 USB 调试</strong><p>点击手机端“允许自动化 / 恢复”，并授权这台电脑。</p></div></li><li><span>3</span><div><strong>连接、刷新、选择</strong><p>保持手机解锁，在这里选择设备后开始任务。</p></div></li></ol></div></div><div class="settings-notes"><div class="note-number">控制权始终在你手中</div><h3>任务随时可以停止。</h3><p>取消会结束当前任务；紧急停止还会请求手机锁定自动化操作，直到你手动恢复。</p><div class="note-number">关于当前连接方式</div><h3>USB 是开发通道。</h3><p>这个桌面版本复用现有 USB 控制链路。手机独立客户端可以直接连接模型服务，在手机上运行任务。</p></div></div>
+    </section>
+  </main>
+</body>
+</html>

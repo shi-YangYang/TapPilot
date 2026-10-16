@@ -55,6 +55,7 @@ class AgentAccessibilityService : AccessibilityService() {
     private var activityHint: String? = null
     private var hintPackage: String? = null
     private var commandDeadline = Long.MAX_VALUE
+    private var commandAllowed: () -> Boolean = { true }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -91,6 +92,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     private fun disconnect() {
         connected = false
+        AgentTaskService.cancelActive("无障碍服务已断开")
         if (instance === this) instance = null
         advanceRevision()
         server?.close()
@@ -110,6 +112,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     internal fun stopAutomation() {
         stopped = true
+        AgentTaskService.cancelActive("已紧急停止")
         getSharedPreferences("safety", MODE_PRIVATE).edit().putBoolean("stopped", true).commit()
         advanceRevision()
     }
@@ -125,7 +128,12 @@ class AgentAccessibilityService : AccessibilityService() {
         if (invalidateSnapshots) snapshots.clear()
     }
 
-    internal fun dispatch(method: String, params: JSONObject): JSONObject {
+    internal fun dispatch(method: String, params: JSONObject, canContinue: () -> Boolean = { true }): JSONObject {
+        if (!canContinue()) throw AgentError("CANCELLED", "任务已停止")
+        if (method == "act_and_observe") {
+            if (!waitSlots.tryAcquire()) throw AgentError("BUSY", "At most two concurrent UI waits are supported", true)
+            try { return actAndObserve(params, canContinue) } finally { waitSlots.release() }
+        }
         // Latch immediately on the socket worker, before any already-queued main-loop action.
         if (method == "emergency_stop") {
             stopped = true
@@ -133,11 +141,13 @@ class AgentAccessibilityService : AccessibilityService() {
         }
         if (method == "wait_for_ui_change") {
             if (!waitSlots.tryAcquire()) throw AgentError("BUSY", "At most two concurrent UI waits are supported", true)
-            try { return waitForChange(params) } finally { waitSlots.release() }
+            try { return waitForChange(params, canContinue) } finally { waitSlots.release() }
         }
         return onMain {
             if (!connected) throw AgentError("SERVICE_UNAVAILABLE", "Accessibility service is disconnected", true)
-            when (method) {
+            if (!canContinue()) throw AgentError("CANCELLED", "任务已停止")
+            commandAllowed = canContinue
+            try { when (method) {
                 "get_device_info" -> JSONObject()
                     .put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL)
                     .put("sdkInt", Build.VERSION.SDK_INT).put("androidVersion", Build.VERSION.RELEASE)
@@ -163,8 +173,31 @@ class AgentAccessibilityService : AccessibilityService() {
                     accepted("open_settings")
                 }
                 else -> throw AgentError("UNKNOWN_METHOD", "Unsupported method")
-            }
+            } } finally { commandAllowed = { true } }
         }
+    }
+
+    private fun actAndObserve(params: JSONObject, canContinue: () -> Boolean): JSONObject {
+        ToolCatalog.validate("act_and_observe", params)
+        if (Looper.myLooper() == Looper.getMainLooper()) throw AgentError("INVALID_THREAD", "Combined observation must run on a worker")
+        val started = SystemClock.elapsedRealtime()
+        val action = dispatch(params.getString("action"), params.getJSONObject("arguments"), canContinue)
+        val acted = SystemClock.elapsedRealtime()
+        val result = JSONObject().put("action", action)
+        var waited = acted
+        try {
+            val waitMs = params.optInt("waitMs", 350)
+            // The action's synthetic revision is already included; wait for a subsequent event.
+            if (waitMs > 0) waitForChange(JSONObject().put("sinceRevision", action.getLong("revision")).put("timeoutMs", waitMs), canContinue)
+            waited = SystemClock.elapsedRealtime()
+            result.put("observation", dispatch("get_ui_tree", JSONObject().put("maxNodes", 300).put("maxDepth", 20), canContinue))
+        } catch (error: AgentError) {
+            result.put("observation", JSONObject.NULL).put("observationError", JSONObject().put("code", error.code)
+                .put("message", error.message).put("retryable", error.retryable))
+        }
+        val ended = SystemClock.elapsedRealtime()
+        return result.put("timings", JSONObject().put("actionMs", acted - started).put("waitMs", waited - acted)
+            .put("observationMs", ended - waited).put("totalMs", ended - started))
     }
 
     private fun <T> onMain(block: () -> T): T {
@@ -197,6 +230,7 @@ class AgentAccessibilityService : AccessibilityService() {
     private fun isLocked(): Boolean = getSystemService(KeyguardManager::class.java).isKeyguardLocked
 
     private fun assertReady() {
+        if (!commandAllowed()) throw AgentError("CANCELLED", "任务已停止")
         checkDeadline()
         if (!connected) throw AgentError("SERVICE_UNAVAILABLE", "Accessibility service is disconnected", true)
         if (stopped) throw AgentError("EMERGENCY_STOPPED", "Automation is stopped. Resume manually in the TapPilot phone app.")
@@ -479,7 +513,7 @@ class AgentAccessibilityService : AccessibilityService() {
             .put("verificationRequired", true)
     }
 
-    private fun waitForChange(params: JSONObject): JSONObject {
+    private fun waitForChange(params: JSONObject, canContinue: () -> Boolean = { true }): JSONObject {
         val sinceValue = params.opt("sinceRevision")
         if (sinceValue !is Number || sinceValue.toDouble() % 1.0 != 0.0 || sinceValue.toLong() < 0) throw AgentError("INVALID_ARGUMENT", "sinceRevision must be a nonnegative integer")
         val since = sinceValue.toLong()
@@ -487,6 +521,7 @@ class AgentAccessibilityService : AccessibilityService() {
         val selector = if (params.has("selector")) requiredSelector(params) else null
         val deadline = SystemClock.elapsedRealtime() + timeout
         while (true) {
+            if (!canContinue()) throw AgentError("CANCELLED", "任务已停止")
             val beforeRead = revision
             val current = onMain {
                 assertReady()

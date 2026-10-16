@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_description">TapPilot 允许您授权的电脑读取当前界面并点击、输入或滚动。屏幕内容可能包含敏感信息。仅在本机 ADB 调试通道工作；不会保存聊天内容。请在电脑端逐次确认可能发送、删除或支付的操作。可随时打开 TapPilot 紧急停止。</string>
+    <string name="accessibility_description">TapPilot 在您启动任务后读取当前界面并点击、输入或滚动。当前界面会发送给您配置的模型服务商，请确认信任该服务商。密码控件会被隐藏，不保存对话。手机端可以独立运行，无需电脑或 USB 调试。敏感提交请手动完成；可随时从通知停止任务，或在 TapPilot 紧急停止。</string>
 </resources>

@@ -17,7 +17,10 @@ test("real SDK stdio initializes, lists strict tool schemas and returns structur
   try {
     await client.connect(transport);
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 13);
+    assert.equal(tools.length, 14);
+    const combined = tools.find((tool) => tool.name === "act_and_observe")!;
+    assert.ok(combined.inputSchema.required?.includes("arguments"));
+    assert.equal(combined.annotations?.destructiveHint, true);
     assert.equal(tools.find((tool) => tool.name === "input_text")?.inputSchema.additionalProperties, false);
     assert.ok(tools.find((tool) => tool.name === "swipe")?.inputSchema.required?.includes("snapshotId"));
     const screenshot = await client.callTool({ name: "take_screenshot", arguments: {} });
@@ -48,7 +51,7 @@ test("trusted startup exposes consistent tool metadata and keeps tool schemas st
     assert.match(client.getInstructions() ?? "", /trusted/i);
     assert.doesNotMatch(client.getInstructions() ?? "", /Ask the human to use the local approval CLI/);
     const { tools } = await client.listTools();
-    for (const name of ["click_element", "input_text", "swipe"]) {
+    for (const name of ["click_element", "input_text", "swipe", "act_and_observe"]) {
       const tool = tools.find((entry) => entry.name === name)!;
       assert.match(tool.description ?? "", /trusted/i);
       assert.doesNotMatch(tool.description ?? "", /require.*human.*approv|approval is mandatory|Requires the human's/);

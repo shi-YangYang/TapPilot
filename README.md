@@ -1,12 +1,37 @@
 # TapPilot — Android AI Agent
 
-通过 **Codex → MCP → USB ADB → AccessibilityService** 读取并操作真实 Android 手机的第一阶段实现。优先使用原生 UI 语义与节点动作，不依赖 OCR，也不把截图作为每步输入。
+用户自行配置 LLM 的 Android 手机助手。提供 **TapPilot 桌面客户端、Android 独立客户端，以及可选 MCP 接口**。模型接入和任务循环由 TapPilot 自己运行；使用独立客户端不需要 Codex。优先使用原生 UI 语义与节点动作，不依赖 OCR，也不把截图作为每步输入。
 
-当前包含 Kotlin APK、TypeScript stdio MCP Server、构建/安装/注册脚本、真实 MCP 通道冒烟测试，以及由 Codex 根据实时页面决策的「设置 → 电池」验收任务。首次开发时本机没有连接 Android 设备，**构建通过不代表真机验收通过**；实际验证记录见 [验证记录](docs/validation.md)。
+独立客户端支持 Chat Completions 兼容接口：API Base URL、API Key、模型名称由用户配置。能接入接口不等于模型一定能够可靠完成任务；模型需要支持 function tool calls。Android 客户端直接调用本机无障碍执行层，日常运行无需电脑、ADB 或数据线。桌面客户端首版通过 USB 开发通道连接，后续提供配对后的无线通道。**构建通过不代表真机或任意模型验收通过**；实际覆盖见 [验证记录](docs/validation.md)。
+
+## 独立客户端快速开始
+
+电脑端开发构建：
+
+```bash
+cd server
+npm ci
+npm run build
+cd ../desktop
+npm ci
+npx --no-install install-electron
+npm run build
+npm start
+# 生成本机 macOS .app
+npm run package:mac
+```
+
+在客户端的模型配置页填写接口地址（通常包含 `/v1`）、模型名称与密钥，保存并测试连接。选择设备后开始任务。桌面密钥使用 Electron safeStorage，Android 使用 AndroidKeyStore 加密保存；不能使用安全存储时明确失败，不回退到明文。界面内容会发送给用户选择的模型服务，其保留策略由该服务决定。TapPilot 不默认保存任务、回答或 UI 树。
+
+Android APK 构建与安装见下文。也可以把 APK 传到手机，通过系统安装器手动安装，无需为独立运行开启开发者选项。手动开启无障碍并允许自动化后，在手机内配置模型和任务；执行期间通过通知或 App 停止。部分系统会限制侧载权限或后台运行，须使用系统允许的用户授权流程。
+
+首版独立客户端遇到发送、购买、删除等疑似敏感提交控件会停止，请用户在手机手动完成。关键词判断无法覆盖所有业务语义，模型仍受任务范围约束。它不会自动操作 MCP 的人工批准 CLI。桌面演示模式使用合成设备与合成模型，不会操作真机，也不代表真实 LLM 验收。
+
+可直接输入：**“打开系统设置，根据当前页面进入电池相关页面，告诉我显示了什么，不修改任何设置。”** 查看进度中的模型耗时、工具耗时和调用次数，以区分模型等待与手机操作耗时。
 
 ## 技术选择与边界
 
-手机端常驻无障碍服务读取 `AccessibilityNodeInfo`，将树裁剪为 JSON。服务只监听抽象 Unix socket `tappilot`，校验对端为 Android shell/root UID；APK 不申请网络权限。Mac 端通过授权 USB ADB 转发，MCP Server 再以 stdio 连接 Codex。无独立 LLM SDK、模型 API Key 或云端控制服务。
+手机端无障碍服务读取 `AccessibilityNodeInfo`，将树裁剪为 JSON。USB 开发通道监听抽象 Unix socket `tappilot`，校验对端为 Android shell/root UID；独立手机客户端使用 HTTPS 访问用户配置的模型。Mac 端可复用授权 USB ADB 转发，MCP Server 仍可通过 stdio 供外部 Agent 使用。协议格式与模型厂商解耦，不内置云端代理或共享 API Key。
 
 复用官方 [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) 和 Android/ADB 平台接口。已评估 [Mobile MCP](https://github.com/mobile-next/mobile-mcp)、[Android Remote Control MCP](https://github.com/danielealbano/android-remote-control-mcp) 与 [uiautomator2](https://github.com/openatx/uiautomator2)。它们可用作完整替代方案或兼容性基准，但本项目选择更小的本地服务来落实事件等待、快照失效和明确的操作授权模式。具体取舍与来源见 [架构说明](docs/architecture.md)。
 
@@ -15,8 +40,9 @@
 ## 目录
 
 ```text
-android/             Kotlin App、AccessibilityService、本地 RPC、Gradle wrapper
-server/              MCP 工具、ADB 桥接、人工批准 CLI、定向集成测试
+android/             Kotlin 客户端、模型循环、密钥存储、无障碍、本地 RPC
+desktop/             Electron 桌面客户端、模型/设备配置、任务进度与停止
+server/              独立模型 runtime、客户端工具适配、MCP、ADB、批准 CLI
 scripts/             环境检查、APK 安装、MCP 注册、真机冒烟/交互验收
 examples/            Codex 配置模板、动态设置导航验收提示词
 docs/                架构、通信协议、验证记录
@@ -25,7 +51,7 @@ AGENTS.md            手机操作约束、批准规则、按风险验证与停�
 
 ## 1. 环境与构建
 
-要求 macOS、JDK 17、Node.js 22 或更新版本、Android SDK Platform 35、对应 Build Tools、Platform Tools (`adb`)；手机 Android 8.0/API 26 或以上。无需 Root。Gradle wrapper 会下载固定版本 Gradle，首次构建也需要访问 Google Maven/Maven Central/npm。
+开发构建要求 macOS、JDK 17、Node.js 22.12 或更新版本、Android SDK Platform 35、对应 Build Tools、Platform Tools (`adb`)；手机 Android 8.0/API 26 或以上。无需 Root。Gradle wrapper 会下载固定版本 Gradle，首次构建也需要访问 Google Maven/Maven Central/npm。安装已打包客户端后无需这些开发环境；桌面 USB 通道仍需 ADB。
 
 ```bash
 git clone <你的 TapPilot 仓库地址>
@@ -47,7 +73,7 @@ cd ..
 
 APK 输出：`android/app/build/outputs/apk/debug/app-debug.apk`。`local.properties` 可以替代 `ANDROID_HOME` 指定本地 `sdk.dir`，该文件已加入忽略列表。已有可用 JDK 时不必执行 Homebrew 示例。
 
-## 2. 安装与手动授权
+## 2. USB 开发安装与手动授权
 
 1. 手机开启开发者选项和 USB 调试，用 USB 连接 Mac，手动同意 RSA 调试授权。
 2. 执行 `adb devices -l`，确认目标序列号状态为 `device` 且为 USB 设备。
@@ -62,7 +88,7 @@ APK 输出：`android/app/build/outputs/apk/debug/app-debug.apk`。`local.proper
 
 服务运行与 ADB 授权是两件事：ADB 已连接并不代表无障碍服务已经启用。App 的普通 Activity 退出后，无障碍服务仍由系统管理；OEM 省电策略可能终止进程，需重新确认状态。
 
-## 3. 注册到 Codex
+## 3. 可选：注册到 Codex
 
 在项目根目录执行：
 
@@ -124,6 +150,7 @@ CLI 会展示待执行动作并要求交互确认。批准后告诉 Codex 继续
 | `press_key` | 返回、Home、最近任务 |
 | `wait_for_ui_change` | 按事件版本或 selector 等待，带超时，不循环截图 |
 | `open_settings` | 仅打开设置首页；不直接跳转电池页面 |
+| `act_and_observe` | 一次动作、事件等待和新 UI 读取合并成一次 RPC；动作已执行但观察失败时单独返回 `observationError` |
 | `emergency_stop` | 立即锁定后续操作并通知手机端停止 |
 | `take_screenshot` | 首版返回未实现状态，视觉兜底属于第二阶段 |
 
@@ -170,6 +197,8 @@ TAPPILOT_SERIAL=YOUR_USB_SERIAL node scripts/device-smoke.mjs
 | Gradle 找不到 Java / SDK | 指向实际 JDK 17 与 SDK；安装 Platform 35，检查 `JAVA_HOME`/`ANDROID_HOME`/`local.properties` |
 | Codex 找不到工具 | 检查 `codex mcp list`、绝对路径和已构建的 `dist/index.js`；重启会话，在 `/mcp` 查看状态 |
 
-## 后续范围
+## 效率与后续范围
 
-第二阶段再加入受控截图、视觉定位、跨 App 工作流、去重/差分树、经验证的低风险策略和安全批处理。首版已保留 revision、快照身份、事件等待与逐步耗时，后续优化可以量化；不提前加入固定业务脚本、OCR 引擎或远程网络暴露。
+独立执行循环启动时预读当前 UI，让第一次模型请求直接决策；`act_and_observe` 把动作、等待、读取从三次工具往返合成一次；给模型的节点去掉空字段，历史快照从上下文移除。执行仍然逐步验证，最多一个界面变更动作进入同一模型轮次，失败不自动重复执行。
+
+配对无线通道、截图视觉兜底与更多厂商原生 API 适配继续迭代。模型实际推理时间仍由用户选择的服务决定；不能把减少工具往返当作已测得整任务加速倍数。

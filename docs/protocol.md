@@ -1,6 +1,22 @@
 # TapPilot 本机协议
 
-本协议连接 Mac MCP 适配层与 Android 无障碍服务。Codex 使用标准 MCP stdio；下述 NDJSON 只是两端内部的设备协议，不是另一套 MCP 实现。
+本协议连接电脑端工具适配层与 Android 无障碍服务。独立客户端自行运行 LLM 循环；外部 Agent 可使用标准 MCP stdio。下述 NDJSON 是内部设备协议。
+
+## v0.2 组合动作
+
+`act_and_observe` 将一次动作、事件等待、新 UI 读取合并在单个设备 RPC：
+
+```json
+{"id":"synthetic-request","method":"act_and_observe","params":{"action":"click_element","arguments":{"snapshotId":"session:2","nodeId":"n7"},"waitMs":350}}
+```
+
+`action` 仅允许 `click_element`、`input_text`、`scroll`、`swipe`、`press_key`、`open_settings`。`arguments` 按对应原工具的严格 schema 验证，不接受额外批准字段。`waitMs` 为 0–1500，默认 350；等待动作结果 revision 之后的事件，不把动作自身推进 revision 当作导航完成。新树仍需由模型检查，动画可能继续发生。
+
+结果含 `action`（原动作结果）、`observation`（完整新快照）、`timings`（`actionMs`、`waitMs`、`observationMs`、`totalMs`）。动作失败时返回 `ok:false`；动作已接受但观察失败时返回 `ok:true`、保留 `action` 并附 `observationError`。后者须重新读取，不可重放动作。
+
+MCP manual 模式继续通过原有独立 CLI 批准内部点击/输入/手势的单次参数，组合调用不改变批准通道。宿主记录新的 observation 快照；观察失败时旧引用已清除。独立客户端另对疑似敏感提交停止，交用户在手机手工完成。
+
+发给模型的 UI 省略空字符串、null、默认 false 属性（保留 `enabled:false`）；控制器仍使用完整快照校验。节点身份、父子关系、顺序、边界和文字不变。
 
 ## 通道与消息边界
 

@@ -1,0 +1,10 @@
+<resources>
+    <item name="task_input" type="id" />
+    <item name="task_start" type="id" />
+    <item name="model_url" type="id" />
+    <item name="model_key" type="id" />
+    <item name="model_name" type="id" />
+    <item name="model_save" type="id" />
+    <item name="model_test" type="id" />
+    <item name="task_status" type="id" />
+</resources>
