@@ -9,9 +9,10 @@
 - 服务端 10 项定向检查通过：新增 9 项进展与诊断回归，加既有快照 ID 变化用例。覆盖读取后判断、初始预读不计数、局部查找、重复动作不被快照或等待时长绕过、事件计数不冒充界面进展、无变化提示、错误脱敏，以及已接受动作观察失败后不重放。没有重复全套运行时测试。
 - Android `ObservationSettleWindowTest` 3 项通过，覆盖动画开始事件、后续内容事件、伪唤醒、持续刷新截止、无事件与零等待；Debug APK 构建成功，版本 `0.3.9` / versionCode `12`。
 - 桌面 typecheck、server/desktop 构建通过。隔离临时 profile 的 `electron-step-diagnostics.cjs` 通过，使用合成事件验证具体动作、失败原因、错误码、界面未变化和任务结束后的进度保留，没有请求真实模型。
-- macOS arm64 应用打包成功。真机覆盖安装返回 `INSTALL_FAILED_ABORTED: User rejected permissions`，未绕过系统安装确认；目前不能把新版事件等待记为真机验收通过。
+- macOS arm64 应用打包成功。首次真机覆盖安装返回 `INSTALL_FAILED_ABORTED: User rejected permissions`，未绕过系统安装确认。用户随后解锁并授权重新安装，`adb install -r` 成功，`dumpsys package` 确认 `versionName=0.3.9`、`versionCode=12`。
+- 更新后 MCP `get_device_info` 与 `get_ui_tree` 返回 `BRIDGE_CLOSED`；`dumpsys accessibility` 显示所有用户的 Enabled services / Bound services 均为空。已请用户手动重新开启 TapPilot 无障碍服务；目前不能把新版事件等待记为真机验收通过。
 
-还需在手机允许安装新版后，用电脑客户端重跑原任务。当前验证不包含用户模型的完整拼多多搜索流程。
+新版已安装，待手机无障碍服务恢复后，用电脑客户端重跑原任务。当前验证不包含用户模型的完整拼多多搜索流程。
 
 ## 电脑模型代理修复 v0.3.8（2026-10-16）
 
