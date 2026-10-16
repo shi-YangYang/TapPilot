@@ -20,7 +20,12 @@ function RunBadge({ client: c }: { client: ClientController }) {
   return <span id="run-badge" className="run-status" data-phase={c.run.phase}>{text}</span>;
 }
 function TaskPage({ client: c }: { client: ClientController }) {
-  const items: AgentActivityItem[] = c.run.steps.map(step => ({ id: step.id, type: 'step', label: step.label, status: step.active ? 'active' : 'complete', meta: step.durationMs === undefined ? undefined : `${(step.durationMs / 1000).toFixed(2)} 秒` }));
+  const items: AgentActivityItem[] = c.run.steps.map(step => ({
+    id: step.id, type: 'step',
+    label: <span>{step.label}{step.failed && ' · 未完成'}{step.result && <span className="block text-xs text-muted-foreground">{step.result}</span>}</span>,
+    status: step.active ? 'active' : step.failed ? 'pending' : 'complete',
+    meta: step.durationMs === undefined ? undefined : `${(step.durationMs / 1000).toFixed(2)} 秒`,
+  }));
   const finished = c.run.phase !== 'idle' && c.run.phase !== 'running';
   const summary = { idle: '任务进度', running: '正在执行', completed: '已完成', cancelled: '已取消', failed: '未完成' }[c.run.phase];
   return <section id="page-task" className="task-page" data-phase={c.run.phase} hidden={c.page !== 'task'}>

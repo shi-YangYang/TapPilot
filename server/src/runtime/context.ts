@@ -48,20 +48,34 @@ export class Conversation {
     this.entries = [{ message: { role: "system", content: system }, snapshot: false }, { message: { role: "user", content: task }, snapshot: false }];
   }
   assistant(message: Message): void { this.entries.push({ message, snapshot: false }); }
-  result(id: string, value: Record<string, unknown>, invalidateSnapshot = false): { stateChanged: boolean } {
-    const content = JSON.stringify(value);
-    if (Buffer.byteLength(content) > 96 * 1024) throw new RuntimeError("TOOL_RESULT_LIMIT", "界面数据过大，请使用更小的 UI 树或控件查找。动作结果不会自动重试。");
+  result(id: string, value: Record<string, unknown>, invalidateSnapshot = false): { stateChanged: boolean; observationChanged?: boolean } {
     const snapshot = hasSnapshot(value);
     let stateChanged = false;
+    let observationChanged: boolean | undefined;
+    let nextDigest: string | undefined;
     if (snapshot || invalidateSnapshot) {
       // Compare UI content itself, not an action/read wrapper or changing revision/timing fields.
       // A partial find_element result is not evidence that the screen changed.
       const observation = fullObservation(value);
       if (observation) {
         const digest = signature(observation);
+        if (this.latestSnapshotDigest) observationChanged = digest !== this.latestSnapshotDigest;
         stateChanged = digest !== this.latestSnapshotDigest;
-        this.latestSnapshotDigest = digest;
+        nextDigest = digest;
       }
+    }
+    const result = value.result as Record<string, unknown> | undefined;
+    const action = result?.action as Record<string, unknown> | undefined;
+    // This is host-authored feedback, never a promotion of instructions found in the UI.
+    const stored = invalidateSnapshot && value.ok === true && action?.accepted === true && observationChanged === false ? {
+      ...value,
+      hostGuidance: { code: "OBSERVATION_UNCHANGED", message: "Android accepted the action, but the observed UI is unchanged. Acceptance does not prove the intended effect. Wait for the expected control or read the UI once before deciding again; an animation may still be running. Do not blindly repeat. If a later fresh observation confirms that a native click had no effect and the intended target is unambiguous, consider one stationary swipe using coordinates inside that target's current observed bounds. Never use this fallback for a protected or restricted action." },
+    } : value;
+    const content = JSON.stringify(stored);
+    if (Buffer.byteLength(content) > 96 * 1024) throw new RuntimeError("TOOL_RESULT_LIMIT", "界面数据过大，请使用更小的 UI 树或控件查找。动作结果不会自动重试。");
+    // Commit history and comparison state only after the entire stored result passes its limit.
+    if (nextDigest !== undefined) this.latestSnapshotDigest = nextDigest;
+    if (snapshot || invalidateSnapshot) {
       for (const entry of this.entries) {
         if (entry.message.role === "tool" && entry.snapshot) {
           entry.message.content = summary(JSON.parse(entry.message.content!));
@@ -70,7 +84,7 @@ export class Conversation {
       }
     }
     this.entries.push({ message: { role: "tool", tool_call_id: id, content }, snapshot });
-    return { stateChanged };
+    return { stateChanged, ...(observationChanged !== undefined ? { observationChanged } : {}) };
   }
   messages(): Message[] {
     // A bounded list of complete rounds keeps the conversation protocol valid. Preserve the latest

@@ -1,6 +1,6 @@
 {
   "name": "tappilot-mcp",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "private": true,
   "type": "module",
   "description": "Desktop phone-agent runtime with an optional MCP accessibility bridge",

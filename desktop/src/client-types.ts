@@ -29,6 +29,10 @@ export interface ClientEvent {
   demo?: boolean;
   turn?: number;
   toolName?: string;
+  action?: string;
+  ok?: boolean;
+  errorCode?: string;
+  observationChanged?: boolean;
   durationMs?: number;
   status?: 'completed' | 'cancelled' | 'failed';
   answer?: string;

@@ -10,7 +10,7 @@
 {"id":"synthetic-request","method":"act_and_observe","params":{"action":"click_element","arguments":{"snapshotId":"session:2","nodeId":"n7"},"waitMs":350}}
 ```
 
-`action` 仅允许 `click_element`、`input_text`、`scroll`、`swipe`、`press_key`、`open_settings`。`arguments` 按对应原工具的严格 schema 验证，不接受额外批准字段。`waitMs` 为 0–1500，默认 350；等待动作结果 revision 之后的事件，不把动作自身推进 revision 当作导航完成。新树仍需由模型检查，动画可能继续发生。
+`action` 仅允许 `click_element`、`input_text`、`scroll`、`swipe`、`press_key`、`open_settings`。`arguments` 按对应原工具的严格 schema 验证，不接受额外批准字段。`waitMs` 为 0–1500，默认 350；从 v0.3.9 起，等待动作结果 revision 之后的事件，再等待连续 120ms 无新事件，始终受原 `waitMs` 总上限约束。无事件或持续刷新时到上限结束，0 表示不等待。不把动作自身推进 revision 当作导航完成，也不反复读取完整树。新树仍需由模型检查，动画可能继续发生；公共 `wait_for_ui_change` 行为不变。
 
 结果含 `action`（原动作结果）、`observation`（完整新快照）、`timings`（`actionMs`、`waitMs`、`observationMs`、`totalMs`）。动作失败时返回 `ok:false`；动作已接受但观察失败时返回 `ok:true`、保留 `action` 并附 `observationError`。后者须重新读取，不可重放动作。
 

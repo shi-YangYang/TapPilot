@@ -208,9 +208,11 @@ class AgentAccessibilityService : AccessibilityService() {
         var waited = acted
         try {
             val waitMs = params.optInt("waitMs", 350)
-            // The action's synthetic revision is already included; wait for a subsequent event.
-            if (waitMs > 0) waitForChange(JSONObject().put("sinceRevision", action.getLong("revision")).put("timeoutMs", waitMs), canContinue)
-            waited = SystemClock.elapsedRealtime()
+            // An initial event can mark the start of an animation, before the new tree is ready.
+            // Debounce subsequent events without exceeding the caller's original wait budget.
+            try {
+                if (waitMs > 0) waitForSettledUi(action.getLong("revision"), waitMs, canContinue)
+            } finally { waited = SystemClock.elapsedRealtime() }
             result.put("observation", dispatch("get_ui_tree", JSONObject().put("maxNodes", 300).put("maxDepth", 20), canContinue))
         } catch (error: AgentError) {
             result.put("observation", JSONObject.NULL).put("observationError", JSONObject().put("code", error.code)
@@ -564,6 +566,27 @@ class AgentAccessibilityService : AccessibilityService() {
                         Thread.currentThread().interrupt()
                         throw AgentError("SERVICE_UNAVAILABLE", "Wait cancelled because the service stopped", true)
                     }
+                }
+            }
+        }
+    }
+
+    private fun waitForSettledUi(since: Long, timeoutMs: Int, canContinue: () -> Boolean) {
+        val window = ObservationSettleWindow(SystemClock.elapsedRealtime(), timeoutMs, since)
+        synchronized(changes) {
+            while (true) {
+                if (!canContinue()) throw AgentError("CANCELLED", "任务已停止")
+                if (!connected) throw AgentError("SERVICE_UNAVAILABLE", "Accessibility service is disconnected", true)
+                if (stopped) throw AgentError("EMERGENCY_STOPPED", "Automation is stopped. Resume manually in the TapPilot phone app.")
+                val remaining = window.nextWaitMs(SystemClock.elapsedRealtime(), revision)
+                if (remaining <= 0) return
+                try {
+                    // The monitor prevents a lost event between reading revision and waiting.
+                    // Cancellation from a transport has no event, so check it at least every 100ms.
+                    changes.wait(minOf(remaining, 100L))
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw AgentError("SERVICE_UNAVAILABLE", "Wait cancelled because the service stopped", true)
                 }
             }
         }

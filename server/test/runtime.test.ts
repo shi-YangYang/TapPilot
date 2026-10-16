@@ -174,7 +174,7 @@ test("changing snapshot IDs and revisions alone do not permit an endless repeat 
     const result = await runAgent({ task: "read", model: server.model, tools, execute: async () => observation(`s${++calls}`, "unchanged synthetic screen") });
     assert.equal(result.status, "failed");
     assert.match(result.error!, /REPEATED_ACTION/);
-    assert.ok(calls <= 3);
+    assert.equal(calls, 4); // Host read plus three unchanged model reads; reads are checked after dispatch.
   } finally { await server.close(); }
 });
 
