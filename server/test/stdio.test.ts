@@ -21,6 +21,11 @@ test("real SDK stdio initializes, lists strict tool schemas and returns structur
     const combined = tools.find((tool) => tool.name === "act_and_observe")!;
     assert.ok(combined.inputSchema.required?.includes("arguments"));
     assert.equal(combined.annotations?.destructiveHint, true);
+    for (const name of ["click_element", "input_text", "scroll", "swipe", "press_key", "open_settings"]) {
+      const description = tools.find(tool => tool.name === name)?.description ?? "";
+      assert.match(description, /observation/i, `${name} must advertise its returned UI`);
+      assert.match(description, /use.*observation|observation.*directly/i, `${name} must tell models to use that UI directly`);
+    }
     assert.equal(tools.find((tool) => tool.name === "input_text")?.inputSchema.additionalProperties, false);
     assert.ok(tools.find((tool) => tool.name === "swipe")?.inputSchema.required?.includes("snapshotId"));
     const screenshot = await client.callTool({ name: "take_screenshot", arguments: {} });

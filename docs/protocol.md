@@ -2,7 +2,7 @@
 
 本协议连接电脑端工具适配层与 Android 无障碍服务。独立客户端自行运行 LLM 循环；外部 Agent 可使用标准 MCP stdio。下述 NDJSON 是内部设备协议。
 
-## v0.2 组合动作
+## 动作和界面一起返回
 
 `act_and_observe` 将一次动作、事件等待、新 UI 读取合并在单个设备 RPC：
 
@@ -15,6 +15,10 @@
 结果含 `action`（原动作结果）、`observation`（完整新快照）、`timings`（`actionMs`、`waitMs`、`observationMs`、`totalMs`）。动作失败时返回 `ok:false`；动作已接受但观察失败时返回 `ok:true`、保留 `action` 并附 `observationError`。后者须重新读取，不可重放动作。
 
 MCP manual 模式继续通过原有独立 CLI 批准内部点击/输入/手势的单次参数，组合调用不改变批准通道。宿主记录新的 observation 快照；观察失败时旧引用已清除。独立客户端另对疑似敏感提交停止，交用户在手机手工完成。
+
+从 v0.3.14 起，外部 MCP 的 `click_element`、`input_text`、`scroll`、`swipe`、`press_key`、`open_settings` 也由宿主自动映射到一次 `act_and_observe` 设备 RPC，默认 `waitMs:350`。参数及原动作结果字段保持兼容，在原结果旁新增 `observation`、`timings` 和可选 `observationError`。例如独立点击返回 `result:{accepted:true,action:"click",revision:12,...,observation:{snapshotId:"session:3",revision:14,...},timings:{...}}`；显式组合工具仍将原动作结果放在 `result.action` 对象内。
+
+模型直接检查返回的 `observation`，并用它的 `snapshotId/nodeId` 执行下一步，不需要为取得节点再次读取。动作顶层的 `revision` 仍是接受动作时的版本，观察有自己更新后的版本。目标未出现、界面仍在变化、树被截断或节点失效时，仍可读取或等待以补足证据；有界事件等待不保证所有页面加载完成。派发后即使超时或断线，也清除旧快照和批准；观察内容无效时保留已接受动作、返回 `observation:null` 与 `observationError`，不得自动重放。
 
 发给模型的 UI 省略空字符串、null、默认 false 属性（保留 `enabled:false`）；控制器仍使用完整快照校验。节点身份、父子关系、顺序、边界和文字不变。
 
@@ -137,7 +141,7 @@ CLI 要求交互式 TTY，向用户展示完整参数，以及从已观测快照
 
 ## 事件等待与恢复
 
-推荐调用循环：获取快照 → 按当前语义选择控件 → 按当前授权模式执行 → 从动作返回的 revision 等待后续变化 → 获取新快照并判断结果。动作接受时就会主动推进 revision；若使用动作前的旧值，无 selector 的等待会立即返回，不能据此证明页面已更新。`wait_for_ui_change` 使用服务事件唤醒，可以要求某个 selector 出现；先立即检查一次，事件到达后再检查，条件不满足则继续等待至超时，不使用固定长时间 `sleep`。
+推荐调用循环：首次获取快照 → 按当前语义选择控件 → 按当前授权模式执行 → 直接检查动作返回的 observation → 选择下一步。仅缺少证据或状态失效时补读。需要等待后续变化时使用最新观察的 revision（观察失败则用动作 revision），不能使用动作前的旧版本：动作接受时会主动推进 revision，旧值会让无 selector 的等待立即返回，不能据此证明页面已更新。`wait_for_ui_change` 使用服务事件唤醒，可以要求某个 selector 出现；先立即检查一次，事件到达后再检查，条件不满足则继续等待至超时，不使用固定长时间 `sleep`。
 
 无 selector 时等待 revision 改变；有 selector 时，只要当前控件已经存在就可立即返回 `matched:true`，不要求同时出现新事件。超时返回 `timedOut:true`，不伪装成条件满足。等待新 revision 不保证网络请求已结束；调用者需要检查目标控件或页面内容。滚动边界、动作不支持和多匹配歧义应作为明确失败处理。不能把同一失败的动作不断重试；先读取当前状态，只有新证据支持时才决定下一步。
 

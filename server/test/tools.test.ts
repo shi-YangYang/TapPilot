@@ -4,14 +4,26 @@ import { Adb } from "../src/adb.js";
 import { ApprovalQueue, type ApprovalPrompt } from "../src/approvals.js";
 import type { PhoneBridge } from "../src/bridge.js";
 import { ToolController, type ToolName } from "../src/tools.js";
+import { AgentError } from "../src/errors.js";
 import { grant, snapshot } from "./helpers.js";
 
 function response(result: unknown) { return { id: "test", ok: true, result, meta: { durationMs: 0 } }; }
 function body(result: Awaited<ReturnType<ToolController["invoke"]>>): any { return result.structuredContent; }
+const timings = { actionMs: 2, waitMs: 12, observationMs: 3, totalMs: 17 };
+function nextSnapshot(revision: number) {
+  return { ...snapshot, snapshotId: `session:${revision}`, revision, nodes: snapshot.nodes.map(node => ({ ...node, editable: true })) };
+}
+function observedAction(action = "click", revision = 2) {
+  return { action: { accepted: true, action, revision }, observation: nextSnapshot(revision), timings };
+}
 
-test("guarded tools need observed targets, no approved:true bypass, payload-bound approval and refresh after action", async () => {
+test("guarded tools retain payload-bound approval and return a new observation after one dispatch", async () => {
   const calls: string[] = [];
-  const bridge: PhoneBridge = { close: async () => undefined, call: async (method) => { calls.push(method); return response(method === "get_ui_tree" ? snapshot : { accepted: true, revision: 2 }); } };
+  const bridge: PhoneBridge = { close: async () => undefined, call: async (method, params) => {
+    calls.push(method);
+    if (method === "act_and_observe") assert.deepEqual(params, { action: "click_element", arguments: { snapshotId: "session:1", nodeId: "n0" }, waitMs: 350 });
+    return response(method === "get_ui_tree" ? snapshot : observedAction());
+  } };
   const queue = new ApprovalQueue();
   const controller = new ToolController(bridge, new Adb(), queue);
   try {
@@ -26,9 +38,17 @@ test("guarded tools need observed targets, no approved:true bypass, payload-boun
     const inspected = await grant(pending.error.details as ApprovalPrompt);
     assert.equal(inspected.preview.target.text, "电池");
     assert.equal(inspected.preview.packageName, "com.android.settings");
-    assert.equal(body(await controller.invoke("click_element", args)).ok, true);
-    assert.deepEqual(calls, ["get_ui_tree", "click_element"]);
+    const result = body(await controller.invoke("click_element", args));
+    assert.equal(result.ok, true);
+    assert.equal(result.result.accepted, true);
+    assert.equal(result.result.action, "click");
+    assert.equal(result.result.observation.snapshotId, "session:2");
+    assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
     assert.equal(body(await controller.invoke("click_element", args)).error.code, "NO_KNOWN_SNAPSHOT");
+    const next = body(await controller.invoke("click_element", { ...args, snapshotId: "session:2" }));
+    assert.equal(next.error.code, "CONFIRMATION_REQUIRED");
+    assert.notEqual(next.error.details.approvalId, pending.error.details.approvalId);
+    assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
   } finally { await controller.close(); }
 });
 
@@ -67,13 +87,15 @@ test("explicit manual mode keeps all guarded actions behind human approval", asy
   } finally { await controller.close(); }
 });
 
-test("trusted actions dispatch once from observed snapshots without approval calls or sockets", async () => {
-  const calls: string[] = [];
-  const editable = { ...snapshot, nodes: snapshot.nodes.map((node) => ({ ...node, editable: true })) };
-  const bridge: PhoneBridge = { close: async () => undefined, call: async (method, _params, _timeout, beforeDispatch) => {
+test("all independent actions return reusable observations through one RPC each without extra reads", async () => {
+  const calls: Array<{ method: string; params: Record<string, unknown> | undefined }> = [];
+  let revision = 1;
+  const bridge: PhoneBridge = { close: async () => undefined, call: async (method, params, _timeout, beforeDispatch) => {
     beforeDispatch?.();
-    calls.push(method);
-    return response(method === "get_ui_tree" ? editable : { accepted: true, revision: 2 });
+    calls.push({ method, params });
+    if (method === "get_ui_tree") return response(nextSnapshot(revision));
+    const result = observedAction(String(params?.action), ++revision);
+    return response({ ...result, action: { ...result.action, target: { nodeId: "n0" }, ancestorHops: 0 } });
   } };
   const queue = new UnusedApprovalQueue();
   const controller = new ToolController(bridge, new Adb(), queue, "trusted");
@@ -81,12 +103,31 @@ test("trusted actions dispatch once from observed snapshots without approval cal
     assert.equal(controller.approvalMode, "trusted");
     for (const { method, args } of guardedActions) {
       assert.equal(body(await controller.invoke(method, args)).error.code, "NO_KNOWN_SNAPSHOT");
-      await controller.invoke("get_ui_tree", {});
-      assert.equal(body(await controller.invoke(method, { ...args, approved: true })).error.code, "INVALID_ARGUMENT");
-      assert.equal(body(await controller.invoke(method, args)).ok, true);
-      assert.equal(body(await controller.invoke(method, args)).error.code, "NO_KNOWN_SNAPSHOT");
     }
-    assert.deepEqual(calls, ["get_ui_tree", "click_element", "get_ui_tree", "input_text", "get_ui_tree", "swipe"]);
+    await controller.invoke("get_ui_tree", {});
+    const actions = [...guardedActions,
+      { method: "scroll" as const, args: { snapshotId: snapshot.snapshotId, nodeId: "n0", direction: "forward" } },
+      { method: "press_key" as const, args: { key: "home" } },
+      { method: "open_settings" as const, args: {} },
+    ];
+    for (const { method, args } of actions) {
+      const currentArgs = "snapshotId" in args ? { ...args, snapshotId: `session:${revision}` } : args;
+      assert.equal(body(await controller.invoke(method, { ...currentArgs, approved: true })).error.code, "INVALID_ARGUMENT");
+      const result = body(await controller.invoke(method, currentArgs));
+      assert.equal(result.ok, true);
+      assert.equal(result.result.accepted, true);
+      assert.equal(result.result.action, method);
+      assert.equal(result.result.revision, revision);
+      assert.deepEqual(result.result.target, { nodeId: "n0" });
+      assert.equal(result.result.ancestorHops, 0);
+      assert.deepEqual(result.result.timings, timings);
+      assert.equal(result.result.observation.snapshotId, `session:${revision}`);
+      assert.deepEqual(calls.at(-1), { method: "act_and_observe", params: {
+        action: method, arguments: method === "swipe" ? { ...currentArgs, durationMs: 350 } : currentArgs, waitMs: 350,
+      } });
+      assert.equal(body(await controller.invoke("click_element", { snapshotId: `session:${revision - 1}`, nodeId: "n0" })).error.code, "NO_KNOWN_SNAPSHOT");
+    }
+    assert.deepEqual(calls.map(call => call.method), ["get_ui_tree", ...actions.map(() => "act_and_observe")]);
     assert.equal(queue.requireCalls, 0);
     assert.equal(queue.startCalls, 0);
   } finally { await controller.close(); }
@@ -111,11 +152,12 @@ test("trusted mode rejects unknown nodes, password fields, and expired observed 
   } finally { t.mock.restoreAll(); await controller.close(); }
 });
 
-test("trusted mode preserves Android stale and locked errors without retrying", async (t) => {
-  for (const code of ["STALE_SNAPSHOT", "DEVICE_LOCKED"]) await t.test(code, async () => {
+test("action failures and uncertain transport outcomes invalidate old references without retrying", async (t) => {
+  for (const code of ["STALE_SNAPSHOT", "DEVICE_LOCKED", "BRIDGE_TIMEOUT"]) await t.test(code, async () => {
     const calls: string[] = [];
     const bridge: PhoneBridge = { close: async () => undefined, call: async (method) => {
       calls.push(method);
+      if (method !== "get_ui_tree" && code === "BRIDGE_TIMEOUT") throw new AgentError(code, "Synthetic uncertain outcome.", false);
       return method === "get_ui_tree" ? response(snapshot) : { id: "test", ok: false, error: { code, message: "Synthetic phone guard refusal.", retryable: false }, meta: { durationMs: 0 } };
     } };
     const controller = new ToolController(bridge, new Adb(), new UnusedApprovalQueue(), "trusted");
@@ -124,9 +166,66 @@ test("trusted mode preserves Android stale and locked errors without retrying", 
       const result = body(await controller.invoke("click_element", guardedActions[0]!.args));
       assert.equal(result.error.code, code);
       assert.equal(result.error.retryable, false);
-      assert.deepEqual(calls, ["get_ui_tree", "click_element"]);
+      assert.equal(body(await controller.invoke("click_element", guardedActions[0]!.args)).error.code, "NO_KNOWN_SNAPSHOT");
+      assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
     } finally { await controller.close(); }
   });
+});
+
+test("accepted actions retain their result when the observation is absent or invalid, without replay", async (t) => {
+  const observationError = { code: "NO_ACTIVE_WINDOW", message: "Synthetic observation unavailable.", retryable: true };
+  const cases = [
+    { name: "phone observation error", observation: { observation: null, observationError } },
+    { name: "null observation", observation: { observation: null } },
+    { name: "missing observation", observation: {} },
+    { name: "invalid observation", observation: { observation: { ...nextSnapshot(2), nodes: [{ nodeId: "n0" }] } } },
+  ];
+  for (const scenario of cases) await t.test(scenario.name, async () => {
+    const calls: string[] = [];
+    const action = { accepted: true, action: "click", revision: 2 };
+    const bridge: PhoneBridge = { close: async () => undefined, call: async method => {
+      calls.push(method);
+      return response(method === "get_ui_tree" ? snapshot : { action, ...scenario.observation, timings });
+    } };
+    const controller = new ToolController(bridge, new Adb(), new UnusedApprovalQueue(), "trusted");
+    try {
+      await controller.invoke("get_ui_tree", {});
+      const result = body(await controller.invoke("click_element", guardedActions[0]!.args));
+      assert.equal(result.ok, true);
+      assert.equal(result.result.accepted, true);
+      assert.equal(result.result.action, "click");
+      assert.equal(result.result.revision, 2);
+      assert.equal(result.result.observation, null);
+      assert.equal(typeof result.result.observationError.code, "string");
+      if (scenario.name === "phone observation error") assert.deepEqual(result.result.observationError, observationError);
+      assert.deepEqual(result.result.timings, timings);
+      assert.equal(body(await controller.invoke("click_element", guardedActions[0]!.args)).error.code, "NO_KNOWN_SNAPSHOT");
+      assert.equal(body(await controller.invoke("click_element", { snapshotId: "session:2", nodeId: "n0" })).error.code, "NO_KNOWN_SNAPSHOT");
+      assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
+    } finally { await controller.close(); }
+  });
+});
+
+test("explicit combined calls retain wait budget and nested result while their new snapshot is reusable", async () => {
+  const calls: Array<{ method: string; params: Record<string, unknown> | undefined }> = [];
+  const combined = observedAction("home");
+  const bridge: PhoneBridge = { close: async () => undefined, call: async (method, params) => {
+    calls.push({ method, params });
+    return response(calls.length === 1 ? combined : observedAction("click", 3));
+  } };
+  const controller = new ToolController(bridge, new Adb(), new UnusedApprovalQueue(), "trusted");
+  try {
+    const args = { action: "press_key", arguments: { key: "home" }, waitMs: 1200 };
+    const result = body(await controller.invoke("act_and_observe", args));
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.result, combined);
+    assert.equal("accepted" in result.result, false);
+    assert.deepEqual(calls[0], { method: "act_and_observe", params: args });
+    const clicked = body(await controller.invoke("click_element", { snapshotId: result.result.observation.snapshotId, nodeId: "n0" }));
+    assert.equal(clicked.ok, true);
+    assert.equal(clicked.result.accepted, true);
+    assert.deepEqual(calls.map(call => call.method), ["act_and_observe", "act_and_observe"]);
+  } finally { await controller.close(); }
 });
 
 test("trusted emergency stop cancels a pending dispatch and remains latched", async () => {
@@ -135,7 +234,7 @@ test("trusted emergency stop cancels a pending dispatch and remains latched", as
   const pending = new Promise<void>((resolve) => { markPending = resolve; });
   const dispatched: string[] = [];
   const bridge: PhoneBridge = { close: async () => undefined, call: async (method, _params, _timeout, beforeDispatch) => {
-    if (method === "click_element") {
+    if (method === "act_and_observe") {
       const gate = new Promise<void>((resolve) => { release = resolve; });
       markPending();
       await gate;
@@ -143,7 +242,7 @@ test("trusted emergency stop cancels a pending dispatch and remains latched", as
     beforeDispatch?.();
     dispatched.push(method);
     if (method === "emergency_stop") throw new Error("Synthetic phone disconnected.");
-    return response(method === "get_ui_tree" ? snapshot : { accepted: true });
+    return response(method === "get_ui_tree" ? snapshot : observedAction());
   } };
   const controller = new ToolController(bridge, new Adb(), new UnusedApprovalQueue(), "trusted");
   try {
@@ -183,7 +282,7 @@ test("emergency stop bypasses a pending mutation and remains latched when phone 
   const calls: string[] = [];
   const bridge: PhoneBridge = { close: async () => undefined, call: async (method) => {
     calls.push(method);
-    if (method === "scroll") return new Promise((resolve) => { release = resolve; });
+    if (method === "act_and_observe") return new Promise((resolve) => { release = resolve; });
     if (method === "emergency_stop") throw new Error("offline");
     return response({});
   } };
@@ -195,8 +294,25 @@ test("emergency stop bypasses a pending mutation and remains latched when phone 
     assert.equal(stop.error.code, "PHONE_STOP_UNCONFIRMED");
     assert.equal(stop.error.details.hostStopped, true);
     assert.equal(body(await controller.invoke("open_settings", {})).error.code, "EMERGENCY_STOPPED");
-    release!(response({ accepted: true }));
+    release!(response(observedAction("scroll")));
     await action;
-    assert.deepEqual(calls, ["scroll", "emergency_stop"]);
+    assert.equal(body(await controller.invoke("click_element", { snapshotId: "session:2", nodeId: "n0" })).error.code, "EMERGENCY_STOPPED");
+    assert.deepEqual(calls, ["act_and_observe", "emergency_stop"]);
   } finally { await controller.close(); }
+});
+
+test("closing during an in-flight action keeps later actions blocked even if an observation arrives", async () => {
+  let release!: (value: ReturnType<typeof response>) => void;
+  const calls: string[] = [];
+  const bridge: PhoneBridge = { close: async () => undefined, call: async method => {
+    calls.push(method);
+    return new Promise(resolve => { release = resolve; });
+  } };
+  const controller = new ToolController(bridge, new Adb(), new UnusedApprovalQueue(), "trusted");
+  const action = controller.invoke("press_key", { key: "home" });
+  await controller.close();
+  release(response(observedAction("home")));
+  await action;
+  assert.equal(body(await controller.invoke("click_element", { snapshotId: "session:2", nodeId: "n0" })).error.code, "EMERGENCY_STOPPED");
+  assert.deepEqual(calls, ["act_and_observe"]);
 });
