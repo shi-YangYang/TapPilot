@@ -1,4 +1,4 @@
-import { Battery, Bot, Check, ChevronRight, Copy, LockKeyhole, Play, RefreshCw, Smartphone, Square, Text, Usb, Wifi } from 'lucide-react';
+import { ArrowUpRight, Battery, Bot, Check, ChevronRight, Copy, Layers2, LockKeyhole, Play, RefreshCw, Smartphone, Square, Text, Usb, Wifi } from 'lucide-react';
 import { PromptInput } from '@/components/agents/prompt-input';
 import { AgentActivity, type AgentActivityItem } from '@/components/agents/agent-activity';
 import { Button } from '@/components/motion/button';
@@ -22,12 +22,12 @@ function TaskPage({ client: c }: { client: ClientController }) {
   const items: AgentActivityItem[] = c.run.steps.map(step => ({ id: step.id, type: 'step', label: step.label, status: step.active ? 'active' : 'complete', meta: step.durationMs === undefined ? undefined : `${(step.durationMs / 1000).toFixed(2)} 秒` }));
   const finished = c.run.phase !== 'idle' && c.run.phase !== 'running';
   const summary = { idle: '任务进度', running: '正在执行', completed: '已完成', cancelled: '已取消', failed: '未完成' }[c.run.phase];
-  return <section id="page-task" className="task-page" hidden={c.page !== 'task'}>
-    <div className="task-heading"><h1>给手机一个任务</h1><RunBadge client={c} /></div>
+  return <section id="page-task" className="task-page" data-phase={c.run.phase} hidden={c.page !== 'task'}>
+    <div className="page-heading task-heading"><div><p className="section-eyebrow">新任务</p><h1>想让手机做什么？</h1></div><span hidden={c.run.phase === 'idle'}><RunBadge client={c} /></span></div>
     <div id="demo-banner" className="demo-notice" hidden={!c.run.demo}>演示模式 · 模拟数据，不操作手机或调用模型。</div>
     <PromptInput
       id="task-input" aria-label="手机任务" value={c.task} onValueChange={c.setTask}
-      placeholder="例如：打开设置，查看电池信息。" maxLength={8000}
+      placeholder="描述你想完成的事…" maxLength={8000} minRows={3} className="task-composer"
       loading={c.busy} readOnly={c.busy} disabled={!c.ready}
       onSubmit={c.startRun} onStop={() => void c.cancel()}
       submitId="run-button" stopId="cancel-button" submitAriaLabel="开始任务" stopAriaLabel="取消任务"
@@ -36,12 +36,11 @@ function TaskPage({ client: c }: { client: ClientController }) {
         <Tooltip content={c.connected ? '查看手机连接' : '连接并选择手机'}><Button variant="ghost" size="sm" data-goto="device" onClick={() => c.setPage('device')} className="max-w-44 min-w-0"><Smartphone className="size-3.5 shrink-0" /><span id="device-title" className="truncate">{c.deviceName}</span>{c.connected && <Check className="size-3 shrink-0" />}</Button></Tooltip>
       </div>}
     />
-    <p className="privacy-caption">开始后将操作手机，并把必要的界面信息发送给所选模型服务。</p>
+    <p className="privacy-caption">开始后会操作手机，并将必要的界面信息发送给所选模型。</p>
+    <div className="suggestion-heading"><span>快速开始</span><Button id="demo-button" variant="ghost" size="sm" disabled={!c.ready || c.busy} onClick={() => void c.startDemo()}><Play className="size-3" />体验演示</Button></div>
     <div className="task-suggestions">
-      {prompts.map(({ label, icon: Icon, text }) => <Button key={label} variant="outline" size="sm" data-prompt={text} disabled={c.busy} onClick={() => c.setTask(text)}><Icon className="size-3.5" />{label}</Button>)}
-      <Button id="demo-button" variant="ghost" size="sm" className="ml-auto" disabled={!c.ready || c.busy} onClick={() => void c.startDemo()}><Play className="size-3.5" />体验演示</Button>
+      {prompts.map(({ label, icon: Icon, text }) => <Button key={label} variant="ghost" className="suggestion-card" data-prompt={text} disabled={c.busy} onClick={() => c.setTask(text)}><span className="suggestion-icon"><Icon className="size-4" /></span><span>{label}</span><ArrowUpRight className="size-3.5 suggestion-arrow" /></Button>)}
     </div>
-    <p id="empty-state" className="task-empty" hidden={c.run.phase !== 'idle'}>执行进度和结果会显示在这里。</p>
     {c.run.phase !== 'idle' && <div id="timeline" className="task-activity" aria-live="polite">
       <AgentActivity items={items} status={c.run.phase === 'running' ? 'working' : 'complete'} duration={c.run.metrics.totalMs / 1000} activeLabel="正在处理任务…" summary={`${summary} · ${(c.run.metrics.totalMs / 1000).toFixed(1)} 秒`} maxHeight={208} />
     </div>}
@@ -53,9 +52,10 @@ function ModelPage({ client: c }: { client: ClientController }) {
   const locked = c.busy || c.saving || c.testing || !c.ready;
   const field = (name: 'baseUrl' | 'model' | 'apiKey' | 'adbPath', value: string) => c.setDraft(previous => ({ ...previous, [name]: value }));
   return <section id="page-model" className="settings-page" hidden={c.page !== 'model'}>
+    <div className="page-heading"><h1>模型设置</h1><p>连接你习惯使用的模型服务。</p></div>
     <form id="model-form" onSubmit={event => { event.preventDefault(); void c.save(); }}>
-      <Card>
-        <CardHeader><CardTitle as="h2">模型设置</CardTitle><CardDescription>支持工具调用的 OpenAI 兼容接口。</CardDescription></CardHeader>
+      <Card className="settings-card">
+        <CardHeader><CardTitle as="h2">连接信息</CardTitle><CardDescription>使用支持工具调用的 OpenAI 兼容接口。</CardDescription></CardHeader>
         <CardContent className="form-fields">
           <Input id="base-url" label="API 地址" type="url" value={c.draft.baseUrl} onChange={value => field('baseUrl', value)} placeholder="https://api.example.com/v1" maxLength={2048} autoComplete="off" required disabled={locked} />
           <Input id="model-name" label="模型名称" value={c.draft.model} onChange={value => field('model', value)} placeholder="填写服务商提供的模型 ID" maxLength={200} autoComplete="off" required disabled={locked} />
@@ -73,7 +73,7 @@ function WirelessPanel({ client: c }: { client: ClientController }) {
   const state = c.wireless;
   const stateLabel = state.connected ? '已连接' : state.paired ? '等待重连' : state.closed ? '尚未开启' : state.pairingAvailable ? '等待扫码' : '已过期';
   const hint = state.closed ? '在手机 TapPilot 中开启无障碍服务并允许自动化。' : state.connected ? '保持手机解锁，然后回到任务页。' : state.paired ? '请在手机重新连接，再开始任务。' : state.pairingAvailable ? '打开手机 TapPilot 的设备页扫码。' : '二维码已过期，请断开后重新生成。';
-  return <div id="wireless-panel" hidden={c.mode !== 'wireless'}><Card>
+  return <div id="wireless-panel" hidden={c.mode !== 'wireless'}><Card className="settings-card">
     <CardHeader><CardTitle as="h2">无线连接</CardTitle><CardDescription>电脑和手机连接同一个 Wi-Fi。</CardDescription><CardAction><span id="wireless-badge" className="run-status" data-phase={state.connected ? 'completed' : 'idle'}>{stateLabel}</span></CardAction></CardHeader>
     <CardContent>
       <div className="network-row"><div id="lan-address" role="group" aria-label="电脑地址" className="network-select"><Select value={c.lanAddress} onValueChange={c.setLanAddress} disabled={!state.closed || c.busy || c.pairingBusy || !c.addresses.length}><SelectTrigger><SelectValue placeholder={c.lanLoading ? '读取网络地址…' : '选择电脑地址'} /></SelectTrigger><SelectContent>{c.addresses.map(item => <SelectItem key={item.address} value={item.address}>{`${item.address} · ${item.name}`}</SelectItem>)}</SelectContent></Select></div><Tooltip content="刷新网络地址"><Button id="refresh-lan" variant="ghost" size="icon" aria-label="刷新网络地址" disabled={c.lanLoading || !state.closed || c.busy} onClick={() => void c.refreshLAN()}><RefreshCw className="size-4" /></Button></Tooltip></div>
@@ -86,7 +86,7 @@ function WirelessPanel({ client: c }: { client: ClientController }) {
   </Card></div>;
 }
 function UsbPanel({ client: c }: { client: ClientController }) {
-  return <div id="usb-panel" hidden={c.mode !== 'usb'}><Card>
+  return <div id="usb-panel" hidden={c.mode !== 'usb'}><Card className="settings-card">
     <CardHeader><CardTitle as="h2">USB 手机</CardTitle><CardDescription>使用数据线连接电脑和手机。</CardDescription><CardAction><Button id="refresh-devices" variant="outline" size="sm" disabled={c.devicesLoading} onClick={() => void c.refreshDevices()}><RefreshCw className="size-3.5" />刷新设备</Button></CardAction></CardHeader>
     <CardContent><div id="device-list" className="usb-list">{c.devices === null ? <p>连接数据线后点击刷新。</p> : !c.devices.length ? <p>未发现手机。请检查数据线、USB 调试和手机上的授权弹窗。</p> : c.devices.map(device => {
       const available = device.state === 'device' && device.usb && !device.emulator;
@@ -97,14 +97,23 @@ function UsbPanel({ client: c }: { client: ClientController }) {
 }
 function DevicePage({ client: c }: { client: ClientController }) {
   return <section id="page-device" className="settings-page" hidden={c.page !== 'device'}>
-    <Tabs value={c.mode} onValueChange={value => { if (!c.busy) c.setMode(value as ConnectionMode); }}><TabsList aria-label="连接方式" className="mb-5"><TabsTrigger id="mode-wireless" value="wireless" disabled={c.busy} className="gap-1.5"><Wifi className="size-3.5" />无线</TabsTrigger><TabsTrigger id="mode-usb" value="usb" disabled={c.busy} className="gap-1.5"><Usb className="size-3.5" />USB</TabsTrigger></TabsList><TabsContent value="wireless"><WirelessPanel client={c} /></TabsContent><TabsContent value="usb"><UsbPanel client={c} /></TabsContent></Tabs>
+    <div className="page-heading"><h1>连接手机</h1><p>选择连接方式，准备开始。</p></div>
+    <Tabs variant="underline" value={c.mode} onValueChange={value => { if (!c.busy) c.setMode(value as ConnectionMode); }}><TabsList aria-label="连接方式" className="connection-tabs"><TabsTrigger id="mode-wireless" value="wireless" disabled={c.busy} className="gap-2"><Wifi className="size-3.5" />无线连接</TabsTrigger><TabsTrigger id="mode-usb" value="usb" disabled={c.busy} className="gap-2"><Usb className="size-3.5" />USB 连接</TabsTrigger></TabsList><TabsContent value="wireless"><WirelessPanel client={c} /></TabsContent><TabsContent value="usb"><UsbPanel client={c} /></TabsContent></Tabs>
     <details className="help-details"><summary>连接不上？</summary><p>在手机 TapPilot 中开启无障碍服务和自动化，再到“设备”页扫码。保持手机解锁。</p><p>检查同一 Wi-Fi、所选电脑地址及防火墙。二维码过期后，点击“断开”再重新生成。</p><p>配对仅本次有效，一次连接一台手机。网络中断会停止任务，不会自动补做动作。</p></details>
   </section>;
 }
 export function App() {
   const c = useClient();
-  return <TooltipProvider><div className="app-shell"><div className="window-drag" /><Tabs value={c.page} onValueChange={value => c.setPage(value as PageName)}>
-    <header className="app-header"><div className="brand">TapPilot<span id="version">{c.version}</span></div><TabsList aria-label="主导航" wrapperClassName="w-auto"><TabsTrigger value="task" data-page="task">任务</TabsTrigger><TabsTrigger value="model" data-page="model">模型</TabsTrigger><TabsTrigger value="device" data-page="device">设备</TabsTrigger></TabsList><Tooltip content="立即停止手机自动化；之后需在手机上恢复。"><Button id="emergency-button" variant="ghost" size="sm" disabled={c.stopping || !c.ready} onClick={() => void c.emergency()} className="text-destructive"><Square className="size-3.5" />紧急停止</Button></Tooltip></header>
-    <main className="app-main"><div id="notice" role="status" className="app-notice" data-error={c.notice.error} hidden={!c.notice.text}>{c.notice.text}</div><TabsContent value="task"><TaskPage client={c} /></TabsContent><TabsContent value="model"><ModelPage client={c} /></TabsContent><TabsContent value="device"><DevicePage client={c} /></TabsContent></main>
-  </Tabs><footer className="app-footer"><span><LockKeyhole className="size-3" />任务记录仅在本次保留</span><Button variant="ghost" size="sm" data-goto="device" onClick={() => c.setPage('device')} className="max-w-64"><span id="connection-dot" className="connection-dot" data-connected={c.connected} /><span id="connection-label" className="truncate">{c.connected ? `${c.deviceName} · ${c.mode === 'wireless' ? '无线' : 'USB'}` : '未选择手机'}</span><ChevronRight className="size-3" /></Button></footer></div></TooltipProvider>;
+  const pages = [{ value: 'task', label: '任务', icon: Layers2 }, { value: 'model', label: '模型', icon: Bot }, { value: 'device', label: '设备', icon: Smartphone }] as const;
+  return <TooltipProvider><div className="app-shell"><div className="window-drag" /><Tabs variant="underline" className="app-layout" value={c.page} onValueChange={value => c.setPage(value as PageName)}>
+    <aside className="app-sidebar">
+      <div className="brand"><span className="brand-mark" aria-hidden="true">T</span>TapPilot</div>
+      <TabsList aria-label="主导航" aria-orientation="vertical" className="sidebar-nav" wrapperClassName="sidebar-nav-wrap">{pages.map(({ value, label, icon: Icon }) => <TabsTrigger key={value} value={value} data-page={value} className="sidebar-tab" indicatorClassName="sidebar-indicator"><Icon className="size-4" />{label}</TabsTrigger>)}</TabsList>
+      <div className="sidebar-footer"><div><LockKeyhole className="size-3" /><span>任务记录仅在本次保留</span></div><span id="version">v{c.version}</span></div>
+    </aside>
+    <div className="workspace">
+      <header className="workspace-header"><span className="workspace-title">{pages.find(page => page.value === c.page)?.label}</span><div className="workspace-actions"><Button variant="ghost" size="sm" data-goto="device" onClick={() => c.setPage('device')} className="connection-button"><span id="connection-dot" className="connection-dot" data-connected={c.connected} /><span id="connection-label" className="truncate">{c.connected ? `${c.deviceName} · ${c.mode === 'wireless' ? '无线' : 'USB'}` : '连接手机'}</span><ChevronRight className="size-3" /></Button><span className="header-divider" /><Tooltip content="立即停止手机自动化；之后需在手机上恢复。"><Button id="emergency-button" variant="ghost" size="sm" disabled={c.stopping || !c.ready} onClick={() => void c.emergency()}><Square className="size-3" />紧急停止</Button></Tooltip></div></header>
+      <main className="app-main"><div id="notice" role="status" className="app-notice" data-error={c.notice.error} hidden={!c.notice.text}>{c.notice.text}</div><TabsContent value="task" className="page-content"><TaskPage client={c} /></TabsContent><TabsContent value="model" className="page-content"><ModelPage client={c} /></TabsContent><TabsContent value="device" className="page-content"><DevicePage client={c} /></TabsContent></main>
+    </div>
+  </Tabs></div></TooltipProvider>;
 }

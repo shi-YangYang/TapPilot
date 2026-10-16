@@ -11,4 +11,19 @@
   font-display: swap;
 }
 
-:root { --font-geist-sans: "Geist"; }
+:root {
+  --font-geist-sans: "Geist";
+  --background: #ffffff;
+  --foreground: #1b1b1b;
+  --card: #f7f7f7;
+  --muted-foreground: #707070;
+  --border: #e7e7e7;
+  --border-strong: #d4d4d4;
+  --primary: #1b1b1b;
+  --primary-foreground: #ffffff;
+  --accent: #ededed;
+  --accent-fg: #1b1b1b;
+  --success: #4d4d4d;
+  --warning: #707070;
+  --danger: #a4433e;
+}

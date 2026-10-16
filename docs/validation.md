@@ -1,5 +1,14 @@
 # 验证记录
 
+## 黑白布局改版 v0.3.4（2026-10-16）
+
+范围：双端三页布局、应用配色和导航视觉，属于 S2。未改模型运行、无线协议、凭据存储或权限逻辑；beUI 组件源码与依赖保持不变。版本同步为 0.3.4，Android versionCode 为 7。
+
+- 服务端版本同步后编译、桌面 bundle 和样式构建成功。先仅渲染默认窗口与 960×700 的三页截图，确认黑白灰主题、侧栏层级、对齐及可见性，没有重叠或横向溢出；未因视觉检查重复运行功能测试。
+- 既有 Electron smoke 单次通过：新版导航与菜单、受控输入、模型保存/连接测试、密钥加密及清空、任务提交、合成演示和取消、三页最小窗口布局。未新增镜像实现的测试，未重复无线或服务端测试套件。
+- Android Debug 与 AndroidTest APK 单次构建成功。独立 API 34 arm64 模拟器运行原 `clientLaunchesWithTaskEntryAndStartControl`，返回 `OK (1 test)`，原断言未修改。临时模拟器及目录已清理，没有启用无障碍或自动化、操作真机、移除 `FLAG_SECURE` 或截取受保护手机页面。
+- macOS arm64 应用完成打包。最终桌面三页、窄窗口及合成演示截图位于 `desktop/release/ui-preview-v0.3.4/`。没有调用用户模型；Android 真机外观留待后续验证。
+
 ## 原版 beUI 组件接入 v0.3.3（2026-10-16）
 
 范围：桌面渲染层迁移到 React、引入 Tailwind/Motion 构建和原组件、重接 UI 事件，属于 S3 的相关客户端验证；Android 为 S2 的原生布局与动画适配。上游固定到 `c392b2e712c3d4944bfa4b24c54c8699bbf5f4c7`，组件来源与有限修改见 `desktop/src/beui/UPSTREAM.json`。

@@ -7,7 +7,7 @@ Original upstream source from `starc007/ui-components` at `c392b2e712c3d4944bfa4
 - Resolve the `@/` alias to this directory in the renderer bundler and TypeScript configuration.
 - Compile the JSX with React 19 and Tailwind CSS 4. Include this directory in Tailwind's source scan.
 - Import Tailwind before `theme.css`. The latter is the exact official beUI theme layer extracted from `lib/theme-css.ts`; keep its semantic token mappings and utilities.
-- Do not apply legacy global button/input/textarea styles that override the source components' geometry. Application layout belongs outside the vendored components.
+- Application layout and product-specific appearance belong outside the vendored components. TapPilot v0.3.4 overrides semantic colors in `../theme.css` and scopes spacing/radius changes to its own containers in `../app.css`; original component source and motion remain intact.
 
 ## Component entry points
 
