@@ -37,13 +37,15 @@ import com.google.zxing.integration.android.IntentIntegrator
 
 /** Protected local control surface: it cannot be read or operated through TapPilot tools. */
 class MainActivity : Activity() {
-    private val ink = Color.rgb(23, 23, 23)
-    private val muted = Color.rgb(99, 99, 99)
-    private val primary = Color.rgb(23, 23, 23)
-    private val surface = Color.WHITE
-    private val cardSurface = Color.rgb(248, 248, 248)
-    private val border = Color.rgb(229, 229, 229)
-    private val danger = Color.rgb(156, 67, 61)
+    private val ink = Color.rgb(244, 244, 244)
+    private val muted = Color.rgb(160, 160, 160)
+    private val primary = Color.rgb(244, 244, 244)
+    private val primaryText = Color.rgb(16, 16, 16)
+    private val backgroundColor = Color.rgb(16, 16, 16)
+    private val surface = Color.rgb(24, 24, 24)
+    private val cardSurface = Color.rgb(32, 32, 32)
+    private val border = Color.rgb(48, 48, 48)
+    private val danger = Color.rgb(239, 155, 150)
     private val worker = Executors.newSingleThreadExecutor()
     private val tabs = mutableListOf<Button>()
     private lateinit var tabIndicator: View
@@ -81,16 +83,16 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        window.statusBarColor = surface
-        window.navigationBarColor = surface
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        val root = column().apply { setBackgroundColor(surface); setPadding(dp(24), dp(20), dp(24), dp(16)); isFocusableInTouchMode = true }
+        window.statusBarColor = backgroundColor
+        window.navigationBarColor = backgroundColor
+        window.decorView.systemUiVisibility = 0
+        val root = column().apply { setBackgroundColor(backgroundColor); setPadding(dp(24), dp(20), dp(24), dp(16)); isFocusableInTouchMode = true }
         root.setOnApplyWindowInsetsListener { view, insets ->
             view.setPadding(dp(24) + insets.systemWindowInsetLeft, dp(20) + insets.systemWindowInsetTop, dp(24) + insets.systemWindowInsetRight, dp(12) + insets.systemWindowInsetBottom)
             insets.consumeSystemWindowInsets()
         }
         val brand = row()
-        brand.addView(label("T", 17f, Color.WHITE, true).apply { gravity = Gravity.CENTER; background = rounded(primary, 7); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }, LinearLayout.LayoutParams(dp(28), dp(28)))
+        brand.addView(label("T", 17f, primaryText, true).apply { gravity = Gravity.CENTER; background = rounded(primary, 7); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }, LinearLayout.LayoutParams(dp(28), dp(28)))
         brand.addView(label("TapPilot", 19f, ink, true), LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(9) })
         root.addView(brand)
         val navigation = row()
@@ -423,7 +425,7 @@ class MainActivity : Activity() {
     }
     private fun button(value: String, primary: Boolean, dangerButton: Boolean = false, action: () -> Unit) = BeUiButton(this).apply {
         text = value; textSize = 14f; isAllCaps = false; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        setTextColor(buttonTextColors(if (primary) Color.WHITE else if (dangerButton) danger else ink)); background = buttonBackground(primary, dangerButton)
+        setTextColor(buttonTextColors(if (primary) primaryText else if (dangerButton) danger else ink)); background = buttonBackground(primary, dangerButton)
         filterTouchesWhenObscured = true; minHeight = 0; minWidth = 0; minimumHeight = 0; minimumWidth = 0
         elevation = 0f; stateListAnimator = null; includeFontPadding = false; setPadding(dp(12), 0, dp(12), 0)
         gravity = Gravity.CENTER; isAllCaps = false
@@ -435,15 +437,15 @@ class MainActivity : Activity() {
         background = buttonBackground(false, navigation = true)
     }
     private fun input(hintValue: String, multiline: Boolean = false) = EditText(this).apply {
-        hint = hintValue; textSize = 14f; setTextColor(ink); setHintTextColor(Color.rgb(132, 132, 132)); isSaveEnabled = false
+        hint = hintValue; textSize = 14f; setTextColor(ink); setHintTextColor(muted); isSaveEnabled = false
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
         inputType = InputType.TYPE_CLASS_TEXT or if (multiline) InputType.TYPE_TEXT_FLAG_MULTI_LINE else InputType.TYPE_TEXT_VARIATION_NORMAL
         setSingleLine(!multiline); gravity = if (multiline) Gravity.TOP or Gravity.START else Gravity.CENTER_VERTICAL or Gravity.START
         setPadding(dp(14), dp(14), dp(14), dp(14)); minHeight = dp(52)
         background = StateListDrawable().apply {
             addState(intArrayOf(-android.R.attr.state_enabled), rounded(cardSurface, 12, border))
-            addState(intArrayOf(android.R.attr.state_focused), rounded(Color.WHITE, 12, primary))
-            addState(intArrayOf(), rounded(Color.WHITE, 12, border))
+            addState(intArrayOf(android.R.attr.state_focused), rounded(surface, 12, primary))
+            addState(intArrayOf(), rounded(surface, 12, border))
         }
         if (Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }

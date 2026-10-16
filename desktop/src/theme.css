@@ -12,18 +12,23 @@
 }
 
 :root {
+  color-scheme: dark;
   --font-geist-sans: "Geist";
-  --background: #ffffff;
-  --foreground: #1b1b1b;
-  --card: #f7f7f7;
-  --muted-foreground: #707070;
-  --border: #e7e7e7;
-  --border-strong: #d4d4d4;
-  --primary: #1b1b1b;
-  --primary-foreground: #ffffff;
-  --accent: #ededed;
-  --accent-fg: #1b1b1b;
-  --success: #4d4d4d;
-  --warning: #707070;
-  --danger: #a4433e;
+  --background: #101010;
+  --foreground: #f4f4f4;
+  --card: #181818;
+  --surface-raised: #202020;
+  --surface-hover: #262626;
+  --muted-foreground: #a0a0a0;
+  --border: #303030;
+  --border-subtle: #252525;
+  --border-strong: #454545;
+  --primary: #f4f4f4;
+  --primary-foreground: #101010;
+  --accent: #262626;
+  --accent-fg: #f4f4f4;
+  --success: #c4c4c4;
+  --warning: #b0b0b0;
+  --danger: #ef9b96;
+  --danger-border: #613b38;
 }
