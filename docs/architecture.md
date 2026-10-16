@@ -1,23 +1,23 @@
 # TapPilot 架构与实施边界
 
-## 当前独立客户端架构（v0.3）
+## 当前架构（v0.3.7）
 
-TapPilot 已有独立桌面客户端和手机客户端，用户配置自己的模型，任务循环由客户端运行。支持 Chat Completions 兼容工具调用接口；MCP 是给外部 Agent 使用的可选适配，不是独立客户端运行的前提。
+电脑运行 TapPilot 桌面客户端，用户在电脑配置自己的模型、输入任务、查看进度和结果。手机只有连接与权限界面，以及无障碍观测和动作执行能力。Chat Completions 兼容工具调用及任务循环均在电脑运行；MCP 是供外部 Agent 使用的可选适配。
 
 ```mermaid
 flowchart LR
-    D[桌面客户端] <--> L[用户配置的 LLM]
-    D <-->|配对 WSS / 可选 USB| A[Android 无障碍执行器]
-    P[手机独立客户端] <--> L
-    P <--> A
+    U[用户目标] --> D[电脑：模型配置、任务循环]
+    D <--> L[用户配置的 LLM]
+    D <-->|扫码配对 WSS / USB ADB| A[Android 被控端：无障碍执行器]
     A <--> V[当前 App 原生 UI]
-    E[外部 Agent] <-->|可选 MCP| M[MCP Server]
-    M <-->|USB| A
+    P[手机：连接、权限、紧急停止] --> A
+    E[外部 Agent] <-->|可选 MCP| M[电脑 MCP Server]
+    M <-->|USB ADB| A
 ```
 
-手机独立运行只需网络与用户授予的无障碍权限；电脑无线模式在同一局域网配对后运行。Android 现在声明 INTERNET 权限，用于模型 API 与主动 WSS 连接。无线认证、互斥执行和断线行为见 [wireless.md](wireless.md)，模型循环与效率措施见 [clients.md](clients.md)。
+两种模式都需要电脑控制手机。USB 模式需要用户授权 USB 调试；扫码模式在同一局域网内运行，不需要开发者选项、ADB 或数据线。手机的 INTERNET 权限用于主动 WSS 连接，不用于调用模型。配对认证、互斥执行和断线行为见 [wireless.md](wireless.md)，电脑任务循环与效率措施见 [clients.md](clients.md)。
 
-**下文保留 v0.1 的调研与 USB/MCP 实施记录**；其中“不申请 INTERNET”“模型留在 Codex”等是该阶段的选择，不代表当前客户端要求。
+**下文保留 v0.1 的调研与 USB/MCP 实施记录**；“不申请 INTERNET”“模型留在 Codex”等描述仅适用于该阶段。v0.2 引入的手机独立模型运行功能已在 v0.3.7 移除。
 
 ## v0.1 架构记录
 

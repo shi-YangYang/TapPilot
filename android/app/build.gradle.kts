@@ -10,8 +10,8 @@ android {
         applicationId = "dev.tappilot.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.3.6"
+        versionCode = 10
+        versionName = "0.3.7"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions {
@@ -24,6 +24,8 @@ android {
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // ZXing 4.3.0 calls ContextCompat/ActivityCompat but omits AndroidX Core from its POM.
+    implementation("androidx.core:core:1.13.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     testImplementation("junit:junit:4.13.2")

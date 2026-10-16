@@ -42,7 +42,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 instance to written
             }
             service?.let { current -> synchronized(current.changes) { current.changes.notifyAll() } }
-            val cleanup = { AgentTaskService.cancelActive("已紧急停止"); service?.advanceRevision(); Unit }
+            val cleanup = { service?.advanceRevision(); Unit }
             if (Looper.myLooper() == Looper.getMainLooper()) cleanup() else (service?.main ?: Handler(Looper.getMainLooper())).post(cleanup)
             if (!persisted) throw AgentError("STOP_PERSISTENCE_FAILED", "已停止当前自动化，但无法持久保存急停状态；请在手机确认，暂勿重启服务")
         }
@@ -109,7 +109,6 @@ class AgentAccessibilityService : AccessibilityService() {
 
     private fun disconnect() {
         connected = false
-        AgentTaskService.cancelActive("无障碍服务已断开")
         if (instance === this) instance = null
         advanceRevision()
         server?.close()

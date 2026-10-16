@@ -23,10 +23,6 @@
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="User-started local Wi-Fi connection to a certificate-pinned computer for cancellable accessibility automation; visible disconnect and emergency-stop notification." />
         </service>
-        <service android:name=".AgentTaskService" android:exported="false" android:foregroundServiceType="specialUse">
-            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-initiated, cancellable on-device AI accessibility task; keeps model requests and native UI actions alive while the user-selected app is foreground." />
-        </service>
         <service
             android:name=".AgentAccessibilityService"
             android:exported="true"

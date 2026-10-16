@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_description">TapPilot 读取界面并执行您授权的点击、输入和滚动。界面会发送给您配置的模型服务商，请确认信任。密码控件会隐藏，本机不保存对话。付款、发送、删除需手动完成。可从通知栏停止任务，或在 TapPilot 紧急停止。</string>
+    <string name="accessibility_description">TapPilot 将当前界面发送到您连接的电脑，由电脑配置的模型服务处理，并执行您授权的点击、输入和滚动。密码控件会隐藏，手机不保存对话。付款、发送、删除需手动完成。可在 TapPilot 紧急停止，无线连接也可从通知栏断开。</string>
 </resources>

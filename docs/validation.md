@@ -1,5 +1,17 @@
 # 验证记录
 
+## 电脑主控与扫码修复 v0.3.7（2026-10-16）
+
+范围为 S3 的相关 Android 验证：移除手机模型运行/任务服务，保留 USB 与无线执行接口；调整连接 UI，清理退役的手机模型凭据，补齐扫码运行依赖。桌面仅同步引导文案和版本，不重复桌面全套测试。
+
+- 真机 crash buffer 定位到两次相同的 `NoClassDefFoundError: androidx.core.content.ContextCompat`，调用来自 ZXing `CaptureManager.openCameraWithPermission`。ZXing 4.3.0 的依赖声明遗漏 AndroidX Core；之前仅测试 APK 提供该类。正式 `implementation` 补充 `androidx.core:core:1.13.1`。
+- Android Debug 与 AndroidTest APK 构建成功；最后一处触区由 44dp 调整为 48dp 恰在首轮编译后写入，因此仅增量重建 APK 纳入该改动，没有重复已通过的单测。版本为 `0.3.7` / versionCode `10`。
+- JVM 定向检查 9 项一次通过：`PairingTest` 3 项、`WirelessConnectionTest` 6 项，覆盖配对校验、通道互斥、RPC 参数拒绝、断线取消和急停。
+- 独立 API 34 arm64 模拟器仪器测试 9 项一次通过（4.161 秒）：`ClientInstrumentedTest` 4 项、`ScannerInstrumentedTest` 2 项、`EmergencyStopInstrumentedTest` 2 项、`LegacyModelCleanupInstrumentedTest` 1 项。扫码测试使用仅加载正式 APK 的独立 ClassLoader，避免测试依赖再次掩盖缺包；实际启动扫码 Activity 并验证安全窗口与拒绝相机权限后退出。UI 测试覆盖两个连接入口、固定急停、主题及配对草稿保持，无线连接期间阻止切换到 USB。旧模型清理测试只用合成命名空间与密钥。
+- server/desktop 构建及 macOS arm64 打包成功，Plist 版本为 `0.3.7`。Android 已通过 `adb install -r` 覆盖安装到授权的 V2352A 真机，安装成功并确认 `versionName=0.3.7`、`versionCode=10`，没有清空应用数据或代开权限。
+
+临时模拟器已清理。尚未实测真机相机解码电脑二维码和用户模型的完整无线任务；上述扫码启动回归不冒充真实配对验收。真机更新后由用户打开 TapPilot，允许所需权限，再从电脑发起任务。
+
 ## 主题切换 v0.3.6（2026-10-16）
 
 范围为 S2：双端主题切换、独立本地偏好、Android 视图重建及桌面主题初始化资源。验证聚焦主题与草稿/运行状态保留，不扩展到无线协议或完整服务端测试。

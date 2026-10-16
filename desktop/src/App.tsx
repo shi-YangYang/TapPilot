@@ -73,7 +73,7 @@ function ModelPage({ client: c }: { client: ClientController }) {
 function WirelessPanel({ client: c }: { client: ClientController }) {
   const state = c.wireless;
   const stateLabel = state.connected ? '已连接' : state.paired ? '等待重连' : state.closed ? '尚未开启' : state.pairingAvailable ? '等待扫码' : '已过期';
-  const hint = state.closed ? '在手机 TapPilot 中开启无障碍服务并允许自动化。' : state.connected ? '保持手机解锁，然后回到任务页。' : state.paired ? '请在手机重新连接，再开始任务。' : state.pairingAvailable ? '打开手机 TapPilot 的设备页扫码。' : '二维码已过期，请断开后重新生成。';
+  const hint = state.closed ? '在手机 TapPilot 中开启无障碍服务并允许自动化。' : state.connected ? '保持手机解锁，然后回到任务页。' : state.paired ? '请在手机重新连接，再开始任务。' : state.pairingAvailable ? '打开手机 TapPilot 扫码。' : '二维码已过期，请断开后重新生成。';
   return <div id="wireless-panel" hidden={c.mode !== 'wireless'}><Card className="settings-card">
     <CardHeader><CardTitle as="h2">无线连接</CardTitle><CardDescription>电脑和手机连接同一个 Wi-Fi。</CardDescription><CardAction><span id="wireless-badge" className="run-status" data-phase={state.connected ? 'completed' : 'idle'}>{stateLabel}</span></CardAction></CardHeader>
     <CardContent>
@@ -100,7 +100,7 @@ function DevicePage({ client: c }: { client: ClientController }) {
   return <section id="page-device" className="settings-page" hidden={c.page !== 'device'}>
     <div className="page-heading"><h1>连接手机</h1><p>选择连接方式，准备开始。</p></div>
     <Tabs variant="underline" value={c.mode} onValueChange={value => { if (!c.busy) c.setMode(value as ConnectionMode); }}><TabsList aria-label="连接方式" className="connection-tabs"><TabsTrigger id="mode-wireless" value="wireless" disabled={c.busy} className="gap-2"><Wifi className="size-3.5" />无线连接</TabsTrigger><TabsTrigger id="mode-usb" value="usb" disabled={c.busy} className="gap-2"><Usb className="size-3.5" />USB 连接</TabsTrigger></TabsList><TabsContent value="wireless"><WirelessPanel client={c} /></TabsContent><TabsContent value="usb"><UsbPanel client={c} /></TabsContent></Tabs>
-    <details className="help-details"><summary>连接不上？</summary><p>在手机 TapPilot 中开启无障碍服务和自动化，再到“设备”页扫码。保持手机解锁。</p><p>检查同一 Wi-Fi、所选电脑地址及防火墙。二维码过期后，点击“断开”再重新生成。</p><p>配对仅本次有效，一次连接一台手机。网络中断会停止任务，不会自动补做动作。</p></details>
+    <details className="help-details"><summary>连接不上？</summary><p>在手机 TapPilot 中开启无障碍服务和自动化，然后扫码连接。保持手机解锁。</p><p>检查同一 Wi-Fi、所选电脑地址及防火墙。二维码过期后，点击“断开”再重新生成。</p><p>配对仅本次有效，一次连接一台手机。网络中断会停止任务，不会自动补做动作。</p></details>
   </section>;
 }
 export function App() {

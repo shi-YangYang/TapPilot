@@ -56,7 +56,7 @@ internal class RpcServer(private val service: AgentAccessibilityService) : AutoC
                 else -> throw AgentError("INVALID_REQUEST", "params must be an object")
             }
             if (AutomationOwner.busy() && (method in ToolCatalog.actions || method == "act_and_observe"))
-                throw AgentError("BUSY", "A local task or wireless session owns automation. Stop or disconnect it before using ADB actions.", true)
+                throw AgentError("BUSY", "A wireless session owns automation. Disconnect it before using ADB actions.", true)
             val result = service.dispatch(method, params) { !(method in ToolCatalog.actions || method == "act_and_observe") || !AutomationOwner.busy() }
             send(socket, JSONObject().put("id", id).put("ok", true).put("result", result), started)
         } catch (error: Exception) {

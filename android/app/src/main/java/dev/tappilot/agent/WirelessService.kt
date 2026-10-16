@@ -63,7 +63,7 @@ class WirelessService : Service() {
                 val notification = notification("正在建立加密连接")
                 if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
                 else startForeground(NOTIFICATION, notification)
-                if (!AutomationOwner.acquire(owner)) { finish("手机正在执行其他任务，请先停止再连接电脑"); return START_NOT_STICKY }
+                if (!AutomationOwner.acquire(owner)) { finish("已有无线连接，请先断开再重新连接"); return START_NOT_STICKY }
                 val pairing = WirelessState.pairing
                 if (pairing == null) { finish("配对信息已失效，请重新扫码或粘贴"); return START_NOT_STICKY }
                 active = this

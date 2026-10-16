@@ -1,15 +1,18 @@
 <resources>
     <item name="theme_toggle" type="id" />
-    <item name="task_input" type="id" />
-    <item name="task_start" type="id" />
-    <item name="model_url" type="id" />
-    <item name="model_key" type="id" />
-    <item name="model_name" type="id" />
-    <item name="model_save" type="id" />
-    <item name="model_test" type="id" />
-    <item name="task_status" type="id" />
+    <item name="connection_wireless" type="id" />
+    <item name="connection_usb" type="id" />
     <item name="wireless_pairing" type="id" />
     <item name="wireless_scan" type="id" />
+    <item name="wireless_manual" type="id" />
     <item name="wireless_connect" type="id" />
+    <item name="wireless_disconnect" type="id" />
     <item name="wireless_status" type="id" />
+    <item name="usb_settings" type="id" />
+    <item name="usb_status" type="id" />
+    <item name="accessibility_settings" type="id" />
+    <item name="automation_status" type="id" />
+    <item name="automation_resume" type="id" />
+    <item name="notification_settings" type="id" />
+    <item name="emergency_stop" type="id" />
 </resources>
