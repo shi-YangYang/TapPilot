@@ -125,7 +125,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
       const toolError = isRecord(result.error) && typeof result.error.code === "string" ? result.error.code :
         typeof observationError?.code === "string" ? observationError.code : undefined;
       const errorCode = toolError ? SAFE_TOOL_ERRORS.has(toolError) ? toolError : "TOOL_FAILED" : result.ok === false ? "TOOL_FAILED" : undefined;
-      const update = conversation.result(call.id, result, name === "act_and_observe");
+      const update = conversation.result(call.id, result, name === "act_and_observe", action);
       emit({ type: "tool_end", turn, toolName: name, ...actionEvent, durationMs: Math.round(performance.now() - toolStarted), ok: result.ok !== false && !errorCode,
         ...(errorCode ? { errorCode } : {}), ...(update.observationChanged !== undefined ? { observationChanged: update.observationChanged } : {}) });
       if (toolError && TERMINAL_TOOL_ERRORS.has(toolError)) {
