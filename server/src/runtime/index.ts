@@ -2,16 +2,16 @@ import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv
 import type { JsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
 import { Conversation, signature } from "./context.js";
 import { completion, endpointFor, RuntimeError } from "./model.js";
-import type { AgentTool, ModelConfig, ToolCall } from "./model.js";
+import type { AgentTool, ModelConfig, ModelFetch, ToolCall } from "./model.js";
 export { testModel, endpointFor, RuntimeError } from "./model.js";
-export type { ModelConfig, AgentTool } from "./model.js";
+export type { ModelConfig, ModelFetch, AgentTool } from "./model.js";
 
 export type AgentMetrics = { totalMs: number; modelMs: number; toolMs: number; modelRequests: number; toolCalls: number };
 export type AgentResult = { status: "completed" | "cancelled" | "failed"; answer: string; metrics: AgentMetrics; error?: string };
 export type AgentOptions = {
   task: string; model: ModelConfig; tools: AgentTool[];
   execute: (name: string, args: Record<string, unknown>, signal: AbortSignal) => Promise<Record<string, unknown>>;
-  signal?: AbortSignal; onEvent?: (event: Record<string, unknown>) => void; maxTurns?: number;
+  signal?: AbortSignal; onEvent?: (event: Record<string, unknown>) => void; maxTurns?: number; modelFetch?: ModelFetch;
 };
 
 const SYSTEM = `You are TapPilot, the user's phone assistant. Complete only the user's task using the provided tools.
@@ -126,7 +126,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
       emit({ type: "model_start", turn });
       const modelStarted = performance.now();
       metrics.modelRequests++;
-      const response = await completion(options.model, conversation.messages(), options.tools, signal).finally(() => { metrics.modelMs += Math.round(performance.now() - modelStarted); });
+      const response = await completion(options.model, conversation.messages(), options.tools, signal, options.modelFetch).finally(() => { metrics.modelMs += Math.round(performance.now() - modelStarted); });
       signal.throwIfAborted();
       const durationMs = Math.round(performance.now() - modelStarted);
       tokens += response.tokens;

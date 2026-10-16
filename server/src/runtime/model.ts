@@ -1,4 +1,5 @@
 export type ModelConfig = { baseUrl: string; apiKey: string; model: string };
+export type ModelFetch = (input: string, init: RequestInit) => Promise<Response>;
 export type AgentTool = { name: string; description: string; inputSchema: Record<string, unknown> };
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 export type Message = {
@@ -35,7 +36,7 @@ function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export async function completion(config: ModelConfig, messages: Message[], tools: AgentTool[], signal: AbortSignal): Promise<{
+export async function completion(config: ModelConfig, messages: Message[], tools: AgentTool[], signal: AbortSignal, modelFetch: ModelFetch = globalThis.fetch): Promise<{
   message: Message; tokens: number; requestBytes: number; responseBytes: number;
 }> {
   const endpoint = endpointFor(config);
@@ -50,7 +51,7 @@ export async function completion(config: ModelConfig, messages: Message[], tools
   const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(90_000)]);
   let response: Response;
   try {
-    response = await fetch(endpoint, {
+    response = await modelFetch(endpoint, {
       method: "POST", redirect: "error", signal: requestSignal,
       headers: { "Content-Type": "application/json", Accept: "application/json", ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}) },
       body: payload,
@@ -117,9 +118,9 @@ export async function completion(config: ModelConfig, messages: Message[], tools
   return { message, tokens, requestBytes, responseBytes };
 }
 
-export async function testModel(config: ModelConfig, signal: AbortSignal = new AbortController().signal): Promise<{ ok: true; model: string; durationMs: number }> {
+export async function testModel(config: ModelConfig, signal: AbortSignal = new AbortController().signal, modelFetch?: ModelFetch): Promise<{ ok: true; model: string; durationMs: number }> {
   const started = performance.now();
-  const result = await completion(config, [{ role: "user", content: "Reply with OK only. This is a connection test." }], [], signal);
+  const result = await completion(config, [{ role: "user", content: "Reply with OK only. This is a connection test." }], [], signal, modelFetch);
   if (result.message.tool_calls?.length) throw new RuntimeError("MODEL_INVALID_RESPONSE", "连接测试意外返回工具调用。");
   return { ok: true, model: config.model.trim(), durationMs: Math.round(performance.now() - started) };
 }

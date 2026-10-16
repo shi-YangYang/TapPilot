@@ -10,6 +10,7 @@ import QRCode from 'qrcode';
 import { ClientError, SettingsStore, taskInput, object, assertSender } from './settings.mjs';
 import { runDemo } from './demo.mjs';
 import { WirelessSession } from './wireless-session.mjs';
+import { createModelFetch } from './model-network.mjs';
 
 app.setName('TapPilot');
 let window;
@@ -17,6 +18,7 @@ let store;
 let active;
 let stopping = false;
 let modelTest;
+let modelFetch;
 let startupError;
 let wireless;
 let savingConfig = false;
@@ -92,7 +94,7 @@ async function begin(value, demo) {
       else {
         run.client = input.mode === 'wireless' ? createWirelessClient(wireless.forDevice(input.deviceId)) : await createUsbClient({ adbPath: await adbPath(), serial: input.serial });
         if (controller.signal.aborted) throw new ClientError('CANCELLED', '操作已取消。');
-        result = await runAgent({ task: input.task, model, tools: run.client.tools, execute: (name, args, signal) => run.client.execute(name, args, signal), signal: controller.signal, onEvent, maxTurns: 24 });
+        result = await runAgent({ task: input.task, model, modelFetch, tools: run.client.tools, execute: (name, args, signal) => run.client.execute(name, args, signal), signal: controller.signal, onEvent, maxTurns: 24 });
       }
       send({ type: 'run_finished', demo, status: result.status, answer: result.answer || '', metrics: result.metrics, ...(result.error ? { error: runtimeError(result.error) } : {}) });
     } catch (error) {
@@ -128,6 +130,7 @@ async function emergency(value) {
 }
 
 app.whenReady().then(async () => {
+  modelFetch = createModelFetch();
   wireless = new WirelessSession({ startHub: options => WirelessHub.start(options), addresses: listLANAddresses,
     qr: value => QRCode.toDataURL(value, { errorCorrectionLevel: 'M', margin: 3, width: 300, color: { dark: '#171717', light: '#ffffff' } }),
     onState: state => {
@@ -151,7 +154,7 @@ app.whenReady().then(async () => {
   handle('test-model', async () => {
     if (active || modelTest) throw new ClientError('TEST_RUNNING', '请等待当前任务或模型测试结束。');
     const controller = new AbortController(); modelTest = controller;
-    try { return await testModel(store.model(), controller.signal); } finally { modelTest = undefined; }
+    try { return await testModel(store.model(), controller.signal, modelFetch); } finally { modelTest = undefined; }
   });
   handle('devices', async () => (await listUsbDevices(await adbPath())).map(({ serial, state, usb, emulator, model }) => ({ serial, state, usb, emulator, model })));
   handle('wireless-interfaces', () => wireless.interfaces());
