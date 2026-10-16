@@ -1,5 +1,16 @@
 # 验证记录
 
+## 可配置模型输出预算 v0.3.13（2026-10-16）
+
+范围为 S3 的相关模型请求与配置持久化：把固定 2048 token 改为默认 8192 的可调预算，保持既有凭据隔离与截断不执行规则。未改手机控制、思考模式或自动重试策略。
+
+- 模型页增加默认折叠“高级设置”，可输入 256～32768 的整数，配置经保存/加载/任务请求和连接测试贯通；旧 v1 配置缺字段时采用 8192，配置版本仍为 1。
+- `model-output-limit.test.ts` 3 项一次通过：默认与自定义预算正确发送、不注入厂商思考参数；非法预算在模型及手机调用前拒绝；截断工具调用及截断答案都不执行变更、不重试、不冒充完成，并显示当前请求预算。
+- `settings.test.mjs` 8 项一次通过，涵盖预算边界、保存/恢复、旧配置兼容以及既有凭据保护。server/desktop 构建、desktop typecheck、macOS arm64 打包成功；界面已显示 `0.3.13` 与默认 8192。
+- 桌面实际打开“模型 → 高级设置”确认旧配置默认显示 8192，并通过现有界面保存、测试连接：当前已配置模型 0.89 秒返回连接成功，验证服务接受新请求预算。该检查未操作手机，也不替代原任务完整重测。
+- Android 仅同步版本为 `0.3.13` / versionCode `16`，Debug APK 构建成功；手机功能未改，无需覆盖安装。
+- 增大输出预算只是允许模型生成更长回复，不能保证更快或不再触及服务端输出/上下文限制，也不代表每次都会用满。90 秒请求超时、512 KiB 响应限制和任务总预算保持不变；没有保存原始模型回复或推理文本来诊断此前截断，所以不将它断定为推理 token 耗尽。
+
 ## 节点触屏点按 v0.3.12（2026-10-16）
 
 范围为 S3 的相关动作适配与敏感目标保护。已有真机记录证明部分桌面控件接受 `ACTION_CLICK` 却没有变化，而相同新树目标的触屏点按生效；不代表所有原生点击都失败。Android 官方也说明部分 App 无法正确支持无障碍点击，可用手势点按作为兼容方式：[AccessibilityService.dispatchGesture](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService#dispatchGesture(android.accessibilityservice.GestureDescription,android.accessibilityservice.AccessibilityService.GestureResultCallback,android.os.Handler))。

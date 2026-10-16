@@ -1,6 +1,7 @@
 import { projectToolResult } from "./ui-projection.js";
 
-export type ModelConfig = { baseUrl: string; apiKey: string; model: string };
+export type ModelConfig = { baseUrl: string; apiKey: string; model: string; maxOutputTokens?: number };
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 export type ModelFetch = (input: string, init: RequestInit) => Promise<Response>;
 export type AgentTool = { name: string; description: string; inputSchema: Record<string, unknown> };
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
@@ -20,6 +21,9 @@ export function endpointFor(config: ModelConfig): string {
       typeof config.model !== "string" || !config.model.trim() || config.model.length > 200 ||
       config.apiKey.length > 8192 || /[\r\n]/.test(config.apiKey)) {
     throw new RuntimeError("INVALID_MODEL_CONFIG", "请填写有效的模型名称、API 地址和密钥。");
+  }
+  if (config.maxOutputTokens !== undefined && (!Number.isSafeInteger(config.maxOutputTokens) || config.maxOutputTokens < 256 || config.maxOutputTokens > 32768)) {
+    throw new RuntimeError("INVALID_MODEL_CONFIG", "单次输出上限须为 256～32768 的整数。");
   }
   let url: URL;
   try { url = new URL(config.baseUrl.trim()); }
@@ -51,6 +55,7 @@ export async function completion(config: ModelConfig, messages: Message[], tools
   message: Message; tokens: number; requestBytes: number; responseBytes: number; modelUiBytes: number; rawUiBytes: number;
 }> {
   const endpoint = endpointFor(config);
+  const maxOutputTokens = config.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   let modelUiBytes = 0;
   let rawUiBytes = 0;
   // Only the model's view is compacted. Controllers and progress checks keep full snapshots.
@@ -64,7 +69,7 @@ export async function completion(config: ModelConfig, messages: Message[], tools
     return { ...message, content: JSON.stringify(projected) };
   });
   const payload = JSON.stringify({
-    model: config.model.trim(), messages: modelMessages, max_tokens: 2048, stream: false,
+    model: config.model.trim(), messages: modelMessages, max_tokens: maxOutputTokens, stream: false,
     ...(tools.length ? { tools: tools.map(tool => ({ type: "function", function: {
       name: tool.name, description: tool.description, parameters: tool.inputSchema,
     } })), tool_choice: "auto", parallel_tool_calls: false } : {}),
@@ -115,7 +120,7 @@ export async function completion(config: ModelConfig, messages: Message[], tools
   if (!object(body) || !Array.isArray(body.choices) || !object(body.choices[0]) || !object(body.choices[0].message)) {
     throw new RuntimeError("MODEL_INVALID_RESPONSE", "模型响应缺少 choices[0].message，请检查接口兼容性。");
   }
-  if (body.choices[0].finish_reason === "length") throw new RuntimeError("MODEL_OUTPUT_LIMIT", "模型输出达到长度上限，未执行本轮动作。");
+  if (body.choices[0].finish_reason === "length") throw new RuntimeError("MODEL_OUTPUT_LIMIT", `模型回复被截断（请求输出上限：${maxOutputTokens} token）。请在模型页调整上限，或检查服务端的输出及上下文限制。本轮未执行动作，也未自动重试。`);
   const raw = body.choices[0].message;
   if (raw.role !== "assistant" || (raw.content !== null && raw.content !== undefined && typeof raw.content !== "string")) {
     throw new RuntimeError("MODEL_INVALID_RESPONSE", "模型消息格式无效，未执行本轮动作。");

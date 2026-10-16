@@ -66,7 +66,7 @@ function TaskPage({ client: c }: { client: ClientController }) {
 }
 function ModelPage({ client: c }: { client: ClientController }) {
   const locked = c.busy || c.saving || c.testing || !c.ready;
-  const field = (name: 'baseUrl' | 'model' | 'apiKey' | 'adbPath', value: string) => c.setDraft(previous => ({ ...previous, [name]: value }));
+  const field = (name: 'baseUrl' | 'model' | 'maxOutputTokens' | 'apiKey' | 'adbPath', value: string) => c.setDraft(previous => ({ ...previous, [name]: value }));
   return <section id="page-model" className="settings-page" hidden={c.page !== 'model'}>
     <div className="page-heading"><h1>模型设置</h1><p>连接你习惯使用的模型服务。</p></div>
     <form id="model-form" onSubmit={event => { event.preventDefault(); void c.save(); }}>
@@ -76,6 +76,7 @@ function ModelPage({ client: c }: { client: ClientController }) {
           <Input id="base-url" label="API 地址" type="url" value={c.draft.baseUrl} onChange={value => field('baseUrl', value)} placeholder="https://api.example.com/v1" maxLength={2048} autoComplete="off" required disabled={locked} />
           <Input id="model-name" label="模型名称" value={c.draft.model} onChange={value => field('model', value)} placeholder="填写服务商提供的模型 ID" maxLength={200} autoComplete="off" required disabled={locked} />
           <div><Input id="api-key" label="API Key" type="password" value={c.draft.apiKey} onChange={value => field('apiKey', value)} placeholder={c.config.hasKey ? '留空保留已保存密钥' : '输入密钥'} maxLength={8192} autoComplete="new-password" disabled={locked} /><div className="key-details"><span id="key-status">{c.config.hasKey ? '已加密保存' : '尚未保存'}</span><label><input id="clear-key" type="checkbox" checked={c.draft.clearKey} onChange={event => c.setDraft(previous => ({ ...previous, clearKey: event.target.checked }))} disabled={locked} />清除密钥</label></div></div>
+          <details className="help-details"><summary>高级设置</summary><Input id="max-output-tokens" label="单次输出上限（token）" type="number" min={256} max={32768} step={1} value={c.draft.maxOutputTokens} onChange={value => field('maxOutputTokens', value)} aria-describedby="output-limit-hint" disabled={locked} /><p id="output-limit-hint">默认 8192；提高上限可能增加耗时和费用。</p></details>
         </CardContent>
         <CardFooter className="form-footer"><span className="local-key"><LockKeyhole className="size-3.5" />密钥加密保存在本机</span><Button id="test-model" variant="outline" disabled={locked} onClick={() => void c.testModel()}>{c.testing ? '测试中…' : '测试连接'}</Button><Button id="save-model" type="submit" disabled={locked}>{c.saving ? '保存中…' : '保存'}</Button></CardFooter>
         {c.modelTestResult && <CardContent><p id="model-test-result" className="inline-result" role="status">{c.modelTestResult}</p></CardContent>}
