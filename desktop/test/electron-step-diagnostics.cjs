@@ -27,7 +27,7 @@ const deadline = setTimeout(() => { process.stderr.write('FAIL diagnostics deadl
   send({ type: 'tool_end', toolName: 'get_ui_tree', ok: true, observationChanged: false, durationMs: 50, turn: 2 });
   await until(() => js('document.getElementById("timeline")?.textContent.includes("NOT_CLICKABLE")'));
   const timeline = await js('document.getElementById("timeline").textContent');
-  assert.match(timeline, /点击目标/);
+  assert.match(timeline, /原生点击/);
   assert.match(timeline, /未完成/);
   assert.match(timeline, /目标不可点击/);
   assert.match(timeline, /NOT_CLICKABLE/);

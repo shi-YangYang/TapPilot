@@ -66,7 +66,7 @@ function projectNodes(nodes: unknown[], pkg: string | undefined, partial: boolea
 
 const scalarFields = [
   "ok", "snapshotId", "revision", "packageName", "windowId", "truncated", "changed", "timedOut", "matched",
-  "accepted", "verificationRequired", "completion", "direction", "ancestorHops",
+  "accepted", "verificationRequired", "completion", "direction", "ancestorHops", "method", "targetNodeId", "actedNodeId",
   "activityHint", "activityHintIsAuthoritative", "serviceConnected", "stopped", "locked", "hostStopped",
   "manufacturer", "model", "sdkInt", "androidVersion", "transport", "protocolVersion", "sessionId",
   "selectedSerial", "approvalMode", "serial", "state", "usb", "emulator", "product", "device",

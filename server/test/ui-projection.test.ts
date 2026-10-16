@@ -77,7 +77,7 @@ test("partial find results keep every match and missing parents are not presente
 test("tool envelopes retain host outcomes and errors while omitting telemetry, unknown metadata and repeated targets", () => {
   const target = node("n3", "n1", { text: "Old synthetic UI label", clickable: true });
   const source = {
-    ok: true, result: { action: { action: "click", accepted: true, verificationRequired: true, target, actedNode: target, ancestorHops: 0 },
+    ok: true, result: { action: { action: "click", accepted: true, verificationRequired: true, method: "native_click", targetNodeId: "n3", actedNodeId: "n3", target, actedNode: target, ancestorHops: 0 },
       observation: null, observationError: { code: "NO_ACTIVE_WINDOW", message: "No active window", retryable: true, unknownDetail: "omit" }, timings: { totalMs: 300 } },
     hostAction: { action: "click_element", accepted: true, observationChanged: false },
     hostGuidance: { code: "OBSERVATION_UNCHANGED", message: "Read once before choosing again." },
@@ -88,6 +88,9 @@ test("tool envelopes retain host outcomes and errors while omitting telemetry, u
   assert.deepEqual(projected.result.action.actedNode, { nodeId: "n3" });
   assert.equal(projected.result.action.accepted, true);
   assert.equal(projected.result.action.verificationRequired, true);
+  assert.equal(projected.result.action.method, "native_click");
+  assert.equal(projected.result.action.targetNodeId, "n3");
+  assert.equal(projected.result.action.actedNodeId, "n3");
   assert.deepEqual(projected.hostAction, source.hostAction);
   assert.deepEqual(projected.hostGuidance, source.hostGuidance);
   assert.deepEqual(projected.result.observationError, { code: "NO_ACTIVE_WINDOW", message: "No active window", retryable: true });

@@ -1,5 +1,17 @@
 # 验证记录
 
+## 节点触屏点按 v0.3.12（2026-10-16）
+
+范围为 S3 的相关动作适配与敏感目标保护。已有真机记录证明部分桌面控件接受 `ACTION_CLICK` 却没有变化，而相同新树目标的触屏点按生效；不代表所有原生点击都失败。Android 官方也说明部分 App 无法正确支持无障碍点击，可用手势点按作为兼容方式：[AccessibilityService.dispatchGesture](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService#dispatchGesture(android.accessibilityservice.GestureDescription,android.accessibilityservice.AccessibilityService.GestureResultCallback,android.os.Handler))。
+
+- 桌面工具增加 `tap_element(snapshotId, nodeId)`，原生 UI 负责定位，主机计算真实触点；普通可见按钮优先点按，原生 `click_element` 保留。复用现有 Android `swipe` 通道，单次调用只派发一个 80ms 点按，不先原生点击，也不自动二次点击。
+- 触点取请求节点到根节点全部观察边界的交集，最多解析 8 层可点击祖先，命中的唯一最深可点击节点必须等于预期实际目标。缺失/截断/过期树、重叠歧义、隐藏/禁用节点、敏感标签、触点覆盖密码节点等情况拒绝；取消、急停与手机自身新鲜度检查保留。
+- `client-node-tap` 13 项、既有 `client-tap-guard` 10 项、`client-tools` 6 项一次通过。独立代码审查发现中间祖先裁剪与密码子控件覆盖两处边界，在测试前修正并纳入用例；没有遗留本次范围内的具体问题。
+- 上下文、自动补读、进展与模型投影共 31 项定向检查一次通过。点按经完整复读仍无变化时给出 `TOUCH_TAP_INEFFECTIVE`，提示模型停止该目标，不再误认为原生点击无效而重复用滑动点按。原生与触屏动作事实分别保留。
+- 进度标签区分“点按目标”“原生点击”“滑动屏幕”。server/desktop 构建、desktop typecheck、macOS arm64 打包通过；客户端已重启为 `0.3.12`。Android 仅同步版本为 `0.3.12` / versionCode `15`，Debug APK 构建通过，已安装手机无需更新或重开权限。外部 MCP 工具协议保持不变。
+- 真机短流程由桌面配置的模型执行“打开购物文件夹，再打开拼多多，进入后停止”。进度记录两次 `tap_element`，分别耗时 0.84 秒和 0.78 秒；没有原生点击失败或改用坐标滑动兜底。任务结束后 MCP 独立读取确认前台是拼多多、UI 树未截断，证明本次节点点按完成了导航。
+- 该轮共 38.4 秒、6 次模型请求、6 次手机工具调用（工具 2.7 秒），最后一轮模型返回输出长度上限，运行时按既有规则停止且未派发后续动作。因此整轮桌面状态为“未完成”，只记节点点按与导航通过，不记完整 Agent 回答成功。本次不扩大到模型输出预算改动，没有盲目重试或重复已通过的检查。
+
 ## 模型回合与界面数据优化 v0.3.11（2026-10-16）
 
 范围为 S3 的相关运行时与模型序列化：自动补读参与取消、停止与观察有效性判断。验证限定于这些行为及桌面指标，不运行全项目测试。

@@ -46,7 +46,7 @@ function assertValidToolPairs(body: Json) {
   assert.equal(pending.size, 0);
 }
 
-test("one host verification removes the model read round before an observed gesture fallback", async () => {
+test("one host verification removes the model read round before a node-based touch fallback", async () => {
   let reads = 0;
   const actions: string[] = [];
   const { result, requests, events } = await scenario((turn, body) => {
@@ -55,8 +55,8 @@ test("one host verification removes the model read round before an observed gest
     const latest = toolResults(body).at(-1)!;
     if (latest.hostGuidance?.code === "NATIVE_CLICK_INEFFECTIVE") {
       assert.equal(latest.result.snapshotId, "verified");
-      return [{ name: "act_and_observe", args: { action: "swipe", arguments: {
-        snapshotId: latest.result.snapshotId, startX: 45, startY: 55, endX: 45, endY: 55, durationMs: 80,
+      return [{ name: "act_and_observe", args: { action: "tap_element", arguments: {
+        snapshotId: latest.result.snapshotId, nodeId: "n1",
       } } }];
     }
     if (latest.hostGuidance?.code === "OBSERVATION_UNCHANGED") return [{ name: "get_ui_tree" }];
@@ -68,11 +68,42 @@ test("one host verification removes the model read round before an observed gest
   });
   assert.equal(result.status, "completed");
   assert.equal(requests.length, 3, "click → fallback → finish, without a model round to request verification");
-  assert.deepEqual(actions, ["click_element", "swipe"]);
+  assert.deepEqual(actions, ["click_element", "tap_element"]);
   assert.equal(reads, 2);
   assert.equal(result.metrics.toolCalls, 4);
   assert.equal(result.metrics.hostReads, 1);
   assert.equal(events.filter(event => event.type === "tool_end" && event.toolName === "get_ui_tree").length, 2);
+});
+
+test("tap verification reports the touch outcome without suggesting another swipe attempt", async () => {
+  let reads = 0;
+  const { result, events } = await scenario((turn, body) => {
+    assertValidToolPairs(body);
+    assert.match(body.messages[0].content, /prefer tap_element with the latest snapshotId\/nodeId/);
+    if (turn === 0) return [{ name: "act_and_observe", args: { action: "tap_element", arguments: { snapshotId: "initial", nodeId: "n1" } } }];
+    const history = toolResults(body);
+    assert.equal(history.at(-1)!.hostGuidance.code, "TOUCH_TAP_INEFFECTIVE");
+    assert.match(history.at(-1)!.hostGuidance.message, /Do not repeat the tap or rename it to swipe/);
+    const priorAction = history.find(entry => entry.hostAction);
+    assert.deepEqual(priorAction.hostAction, { action: "tap_element", accepted: true, observationChanged: false });
+    return undefined;
+  }, async name => name === "get_ui_tree" ? observed(++reads === 1 ? "initial" : "verified") : accepted());
+  assert.equal(result.status, "completed");
+  assert.equal(result.metrics.modelRequests, 2);
+  assert.equal(result.metrics.hostReads, 1);
+  assert.equal(reads, 2);
+  assert.deepEqual(events.filter(event => event.type === "tool_start" && event.toolName === "act_and_observe").map(event => event.action), ["tap_element"]);
+});
+
+test("tap remains a UI-changing action and cannot share a batch with another action", async () => {
+  const calls: string[] = [];
+  const { result } = await scenario(() => [
+    { name: "act_and_observe", args: { action: "tap_element", arguments: { snapshotId: "initial", nodeId: "n1" } } },
+    action(),
+  ], async name => { calls.push(name); return observed("initial"); });
+  assert.equal(result.status, "failed");
+  assert.match(result.error!, /UNOBSERVED_ACTION_BATCH/);
+  assert.deepEqual(calls, ["get_ui_tree"], "the whole model batch must be rejected before any mutation");
 });
 
 test("recoverable snapshot errors get one fresh observation without replaying the action", async () => {
