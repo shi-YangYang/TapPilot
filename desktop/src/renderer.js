@@ -44,7 +44,7 @@ function showConfig(next) {
   $('adb-path').value = next.adbPath || '';
   $('key-status').textContent = next.hasKey ? '已加密保存' : '尚未保存';
   $('api-key').placeholder = next.hasKey ? '已保存 · 留空保留原密钥' : '输入密钥';
-  $('model-label').textContent = next.model ? `◈  ${next.model}` : '未配置模型';
+  $('model-label').textContent = next.model || '未配置模型';
   selectedSerial ||= next.serial || '';
   setMode(next.mode || 'usb');
   updateDevice();

@@ -129,7 +129,7 @@ async function emergency(value) {
 
 app.whenReady().then(async () => {
   wireless = new WirelessSession({ startHub: options => WirelessHub.start(options), addresses: listLANAddresses,
-    qr: value => QRCode.toDataURL(value, { errorCorrectionLevel: 'M', margin: 3, width: 300, color: { dark: '#292538', light: '#fffefa' } }),
+    qr: value => QRCode.toDataURL(value, { errorCorrectionLevel: 'M', margin: 3, width: 300, color: { dark: '#171717', light: '#ffffff' } }),
     onState: state => {
       if (active?.target?.mode === 'wireless' && (!state.connected || state.deviceId !== active.target.deviceId)) active.controller.abort();
       send({ type: 'wireless_state', state });
@@ -168,7 +168,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.on('will-download', event => event.preventDefault());
-  window = new BrowserWindow({ width: 1190, height: 820, minWidth: 960, minHeight: 700, title: 'TapPilot', backgroundColor: '#f5f4f0', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 22, y: 22 }, webPreferences: { preload: path.join(app.getAppPath(), 'dist', 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, spellcheck: false, devTools: !app.isPackaged } });
+  window = new BrowserWindow({ width: 1190, height: 820, minWidth: 960, minHeight: 700, title: 'TapPilot', backgroundColor: '#fcfcfc', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 22, y: 22 }, webPreferences: { preload: path.join(app.getAppPath(), 'dist', 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, spellcheck: false, devTools: !app.isPackaged } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.on('will-attach-webview', event => event.preventDefault());

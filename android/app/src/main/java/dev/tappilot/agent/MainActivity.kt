@@ -5,9 +5,13 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.graphics.drawable.StateListDrawable
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -27,10 +31,13 @@ import com.google.zxing.integration.android.IntentIntegrator
 
 /** Protected local control surface: it cannot be read or operated through TapPilot tools. */
 class MainActivity : Activity() {
-    private val ink = Color.rgb(23, 43, 38)
-    private val muted = Color.rgb(99, 117, 109)
-    private val green = Color.rgb(20, 120, 93)
-    private val surface = Color.rgb(244, 247, 243)
+    private val ink = Color.rgb(23, 23, 23)
+    private val muted = Color.rgb(99, 99, 99)
+    private val primary = Color.rgb(2, 133, 247)
+    private val surface = Color.rgb(252, 252, 252)
+    private val cardSurface = Color.rgb(245, 245, 245)
+    private val border = Color.rgb(229, 229, 229)
+    private val danger = Color.rgb(180, 35, 24)
     private val worker = Executors.newSingleThreadExecutor()
     private val tabs = mutableListOf<Button>()
     private lateinit var body: LinearLayout
@@ -44,15 +51,21 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var result: TextView
     private lateinit var timings: TextView
-    private lateinit var deviceStatus: TextView
+    private lateinit var accessibilityStatus: TextView
+    private lateinit var automationStatus: TextView
+    private lateinit var notificationStatus: TextView
+    private lateinit var taskModelState: Button
+    private lateinit var taskDeviceState: Button
     private lateinit var modelStatus: TextView
     private lateinit var start: Button
+    private lateinit var stop: Button
     private lateinit var pairingInput: EditText
     private lateinit var wirelessStatus: TextView
     private lateinit var wirelessConnect: Button
     private var waitingToConnect = false
     private var testing: ModelClient? = null
     private var waitingToStart = false
+    private var modelConfigured = false
     private val observer: (TaskViewState) -> Unit = { renderState(it) }
     private val wirelessObserver: (WirelessViewState) -> Unit = { renderWireless(it) }
 
@@ -62,97 +75,123 @@ class MainActivity : Activity() {
         window.statusBarColor = surface
         window.navigationBarColor = surface
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        val root = column().apply { setBackgroundColor(surface); setPadding(dp(22), dp(22), dp(22), dp(16)) }
+        val root = column().apply { setBackgroundColor(surface); setPadding(dp(24), dp(20), dp(24), dp(16)); isFocusableInTouchMode = true }
         root.setOnApplyWindowInsetsListener { view, insets ->
-            view.setPadding(dp(22) + insets.systemWindowInsetLeft, dp(18) + insets.systemWindowInsetTop, dp(22) + insets.systemWindowInsetRight, dp(12) + insets.systemWindowInsetBottom)
+            view.setPadding(dp(24) + insets.systemWindowInsetLeft, dp(20) + insets.systemWindowInsetTop, dp(24) + insets.systemWindowInsetRight, dp(12) + insets.systemWindowInsetBottom)
             insets.consumeSystemWindowInsets()
         }
         val brand = row()
-        brand.addView(label("T", 26f, Color.WHITE, true).apply { gravity = Gravity.CENTER; background = rounded(green, 15); setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        brand.addView(column().apply { setPadding(dp(12), 0, 0, 0); addView(label("TapPilot", 25f, ink, true)) })
+        brand.addView(label("T", 21f, Color.WHITE, true).apply { gravity = Gravity.CENTER; background = rounded(primary, 11); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }, LinearLayout.LayoutParams(dp(36), dp(36)))
+        brand.addView(label("TapPilot", 23f, ink, true), LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(10) })
+        brand.addView(badge("手机端"))
         root.addView(brand)
-        val navigation = row().apply { setPadding(0, dp(24), 0, dp(18)) }
+        val navigation = row().apply { background = rounded(cardSurface, 28); setPadding(dp(4), dp(4), dp(4), dp(4)) }
         listOf("任务", "模型", "设备").forEachIndexed { index, name ->
             val button = button(name, false) { selectTab(index) }
             tabs.add(button)
-            navigation.addView(button, LinearLayout.LayoutParams(0, dp(45), 1f).apply { if (index != 2) marginEnd = dp(8) })
+            navigation.addView(button, LinearLayout.LayoutParams(0, dp(48), 1f).apply { if (index != 2) marginEnd = dp(4) })
         }
-        root.addView(navigation)
+        root.addView(navigation, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(20); bottomMargin = dp(24) })
         body = column()
-        root.addView(ScrollView(this).apply { isFillViewport = true; addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false; clipToPadding = false; addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
         taskPage = buildTaskPage(); modelPage = buildModelPage(); devicePage = buildDevicePage()
         setContentView(root)
         selectTab(0)
         loadSettings()
     }
     private fun buildTaskPage() = column().apply {
-        addView(label("想让手机做什么？", 23f, ink, true).apply { setPadding(0, 0, 0, dp(20)) })
-        addView(card().apply {
-            task = input("例如：打开设置，查看电池信息", multiline = true).apply { id = R.id.task_input; minLines = 4; maxLines = 7 }
+        addView(pageTitle("你想完成什么？"))
+        addView(row().apply {
+            taskModelState = button("模型 · 待设置", false) { selectTab(1) }.apply { textSize = 13f }
+            taskDeviceState = button("设备 · 待授权", false) { selectTab(2) }.apply { textSize = 13f }
+            addView(taskModelState, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) })
+            addView(taskDeviceState, LinearLayout.LayoutParams(0, dp(44), 1f))
+        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) })
+        addView(card(outlined = true).apply {
+            val composer = this
+            task = input("例如，打开设置查看电池信息", multiline = true).apply {
+                id = R.id.task_input; minLines = 4; maxLines = 8; textSize = 18f
+                background = null; setPadding(0, 0, 0, dp(16))
+                setOnFocusChangeListener { _, focused -> composer.background = rounded(Color.WHITE, 16, if (focused) primary else border) }
+            }
             addView(task, LinearLayout.LayoutParams(-1, -2))
-            addView(label("开始后将返回桌面自动操作。", 12f, muted).apply { setPadding(0, dp(12), 0, dp(14)) })
-            start = button("开始任务", true, ::startTask).apply { id = R.id.task_start }
-            addView(start, LinearLayout.LayoutParams(-1, dp(50)))
+            addView(divider(), LinearLayout.LayoutParams(-1, dp(1)))
+            addView(label("开始后自动返回桌面", 13f, muted).apply { setPadding(0, dp(14), 0, dp(14)) })
+            start = button("开始任务", true, action = ::startTask).apply { id = R.id.task_start }
+            addView(start, LinearLayout.LayoutParams(-1, dp(48)))
         })
         addView(card().apply {
-            status = label("准备就绪", 18f, ink, true).apply { id = R.id.task_status; setPadding(0, dp(10), 0, dp(10)) }; addView(status)
-            timings = label("", 12f, muted); addView(timings)
-            result = label("首次使用：先配置模型，再开启设备权限。", 14f, ink).apply { setPadding(0, dp(16), 0, dp(8)); setTextIsSelectable(true) }; addView(result)
-            addView(button("停止当前任务", false) { AgentTaskService.cancelActive() }, LinearLayout.LayoutParams(-1, dp(46)))
+            addView(row().apply {
+                status = label("准备就绪", 16f, ink, true).apply { id = R.id.task_status }
+                addView(status, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(12) })
+                stop = button("停止", false) { AgentTaskService.cancelActive() }.apply { isEnabled = false; contentDescription = "停止当前任务" }
+                addView(stop, LinearLayout.LayoutParams(dp(76), dp(44)))
+            })
+            result = label("配置模型、开启设备权限，即可开始。", 14f, muted).apply { setPadding(0, dp(12), 0, 0); setTextIsSelectable(true) }; addView(result)
+            timings = label("", 12f, muted).apply { visibility = View.GONE; setPadding(0, dp(12), 0, 0) }; addView(timings)
         })
-        addView(label("界面会发送给所选模型，请确认信任。本机不保存任务记录。付款、发送、删除等操作需手动完成。", 12f, muted).apply { setPadding(dp(4), dp(6), dp(4), dp(22)) })
+        addView(label("界面将发送给你配置的模型，本机不保存任务记录。付款、发送、删除需手动完成。", 12f, muted).apply { setPadding(dp(4), dp(2), dp(4), dp(24)) })
     }
     private fun buildModelPage() = column().apply {
-        addView(label("模型设置", 23f, ink, true))
-        addView(label("需支持工具调用的 OpenAI 兼容 HTTPS 接口。", 14f, muted).apply { setPadding(0, dp(8), 0, dp(20)) })
+        addView(pageTitle("连接你的模型"))
+        addView(label("OpenAI 兼容 · 工具调用 · HTTPS", 14f, muted).apply { setPadding(0, 0, 0, dp(20)) })
         addView(card().apply {
-            addView(label("API 地址", 13f, muted, true))
+            addView(label("API 地址", 14f, ink, true))
             url = input("https://你的服务地址/v1").apply { id = R.id.model_url; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI }; addView(url)
-            addView(label("模型名称", 13f, muted, true).apply { setPadding(0, dp(18), 0, 0) })
-            model = input("填写服务商提供的模型名称").apply { id = R.id.model_name }; addView(model)
-            addView(label("密钥（API Key）", 13f, muted, true).apply { setPadding(0, dp(18), 0, 0) })
+            addView(label("模型名称", 14f, ink, true).apply { setPadding(0, dp(20), 0, 0) })
+            model = input("服务商提供的模型名称").apply { id = R.id.model_name }; addView(model)
+            addView(label("API Key", 14f, ink, true).apply { setPadding(0, dp(20), 0, 0) })
             key = input("粘贴 API Key").apply { id = R.id.model_key; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }; addView(key)
-            addView(label("配置仅加密保存在本机。无需密钥的服务可留空。", 12f, muted).apply { setPadding(0, dp(12), 0, dp(16)) })
-            addView(button("保存配置", true) { safe { SettingsStore(this@MainActivity).save(readSettings()); modelStatus.text = "已保存" } }.apply { id = R.id.model_save }, LinearLayout.LayoutParams(-1, dp(48)))
-            addView(button("测试连接", false, ::testConnection).apply { id = R.id.model_test }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
-            modelStatus = label("尚未测试", 13f, muted).apply { setPadding(0, dp(14), 0, 0) }; addView(modelStatus)
+            addView(label("仅加密保存在本机；无需密钥时可留空。", 13f, muted).apply { setPadding(0, dp(12), 0, dp(20)) })
+            addView(row().apply {
+                addView(button("保存配置", true) { safe { SettingsStore(this@MainActivity).save(readSettings()); modelStatus.text = "已保存"; modelConfigured = true; updateTaskSetup() } }.apply { id = R.id.model_save }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
+                addView(button("测试连接", false, action = ::testConnection).apply { id = R.id.model_test }, LinearLayout.LayoutParams(0, dp(48), 1f))
+            })
+            modelStatus = label("尚未测试", 13f, muted).apply { setPadding(0, dp(16), 0, 0) }; addView(modelStatus)
         })
         addView(button("清除本机模型配置", false) {
             AlertDialog.Builder(this@MainActivity).setTitle("清除模型配置？").setMessage("会删除本机保存的 API 地址、模型名称与密钥。").setNegativeButton("取消", null)
-                .setPositiveButton("清除") { _, _ -> SettingsStore(this@MainActivity).clear(); url.setText(""); key.setText(""); model.setText(""); modelStatus.text = "配置已清除" }.show()
-        })
+                .setPositiveButton("清除") { _, _ -> SettingsStore(this@MainActivity).clear(); url.setText(""); key.setText(""); model.setText(""); modelStatus.text = "配置已清除"; modelConfigured = false; updateTaskSetup() }.show()
+        }, LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(24) })
     }
     private fun buildDevicePage() = column().apply {
-        addView(label("连接与权限", 23f, ink, true).apply { setPadding(0, 0, 0, dp(20)) })
+        addView(pageTitle("设备与连接"))
         addView(card().apply {
-            addView(label("无线连接电脑", 18f, ink, true))
-            addView(label("连接同一 Wi-Fi，在电脑设备页点击“显示二维码”，再扫码。", 12f, muted).apply { setPadding(0, dp(10), 0, dp(12)) })
-            wirelessStatus = label("尚未连接电脑", 13f, muted).apply { id = R.id.wireless_status }; addView(wirelessStatus)
-            addView(button("扫描电脑二维码", true, ::scanPairing).apply { id = R.id.wireless_scan }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(14) })
-            pairingInput = input("或粘贴电脑端配对地址").apply { id = R.id.wireless_pairing; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }; addView(pairingInput)
-            wirelessConnect = button("连接电脑", false, ::connectWireless).apply { id = R.id.wireless_connect }
-            addView(wirelessConnect, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
-            addView(button("断开电脑", false) { WirelessService.disconnectActive() }, LinearLayout.LayoutParams(-1, dp(45)).apply { topMargin = dp(6) })
-            addView(label("应用重启后需重新配对。连接电脑时，不能启动手机端任务。", 12f, muted).apply { setPadding(0, dp(12), 0, 0) })
-        })
-        addView(card().apply {
-            deviceStatus = label("", 15f, ink).apply { setPadding(0, 0, 0, dp(18)) }; addView(deviceStatus)
-            addView(button("1  开启无障碍服务", true) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }, LinearLayout.LayoutParams(-1, dp(49)))
-            addView(label("在系统设置中开启“TapPilot 手机自动化”；若提示“受限设置”，按系统指引处理。", 12f, muted).apply { setPadding(0, dp(10), 0, dp(16)) })
-            addView(button("2  允许自动化 / 恢复", false) {
+            addView(sectionTitle("手机权限", "必需"))
+            accessibilityStatus = label("未开启", 13f, muted)
+            addView(permissionRow("无障碍服务", accessibilityStatus, button("开启服务", true) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }))
+            addView(label("在系统设置中找到“TapPilot 手机自动化”。受限设置请按系统指引处理。", 13f, muted).apply { setPadding(0, dp(10), 0, dp(16)) })
+            addView(divider(), LinearLayout.LayoutParams(-1, dp(1)))
+            automationStatus = label("已停止", 13f, muted)
+            addView(permissionRow("自动化", automationStatus, button("允许 / 恢复", false) {
                 safe {
                     val service = AgentAccessibilityService.instance ?: throw AgentError("SERVICE_UNAVAILABLE", "请先开启无障碍服务，再允许自动化")
                     service.resumeLocally(); updateDeviceStatus()
                 }
-            }, LinearLayout.LayoutParams(-1, dp(49)))
-            addView(button("3  允许任务通知", false) { requestNotifications() }, LinearLayout.LayoutParams(-1, dp(49)).apply { topMargin = dp(8) })
+            }))
+            addView(divider(), LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(16) })
+            notificationStatus = label("待允许", 13f, muted)
+            addView(permissionRow("任务通知", notificationStatus, button("允许通知", false) { requestNotifications() }))
         })
-        addView(card().apply {
-            addView(label("停止与恢复", 18f, ink, true))
-            addView(label("通知栏可停止任务。急停后所有自动化都将停止，需在本页点击“允许自动化 / 恢复”。", 13f, muted).apply { setPadding(0, dp(10), 0, dp(16)) })
-            addView(button("紧急停止所有自动化", false) {
+        addView(card(outlined = true).apply {
+            addView(sectionTitle("连接电脑", "可选"))
+            wirelessStatus = label("尚未连接", 14f, muted).apply { id = R.id.wireless_status; setPadding(0, dp(12), 0, dp(12)) }; addView(wirelessStatus)
+            addView(label("同一 Wi-Fi 下，在电脑设备页显示二维码。", 13f, muted))
+            addView(button("扫描二维码", true, action = ::scanPairing).apply { id = R.id.wireless_scan; contentDescription = "扫描电脑二维码" }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(16) })
+            pairingInput = input("或粘贴电脑端配对地址").apply { id = R.id.wireless_pairing; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }; addView(pairingInput)
+            addView(row().apply {
+                wirelessConnect = button("连接电脑", false, action = ::connectWireless).apply { id = R.id.wireless_connect }
+                addView(wirelessConnect, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
+                addView(button("断开连接", false) { WirelessService.disconnectActive() }, LinearLayout.LayoutParams(0, dp(48), 1f))
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            addView(label("重启应用需重新配对；连接期间不能运行手机端任务。", 13f, muted).apply { setPadding(0, dp(14), 0, 0) })
+        })
+        addView(card(outlined = true).apply {
+            addView(label("安全控制", 17f, ink, true))
+            addView(label("通知栏可停止任务。急停后需在上方手动恢复。", 13f, muted).apply { setPadding(0, dp(10), 0, dp(16)) })
+            addView(button("紧急停止所有自动化", false, dangerButton = true) {
                 safe { AgentAccessibilityService.latchEmergencyStop(this@MainActivity); updateDeviceStatus() }
-            }.apply { setTextColor(Color.rgb(167, 56, 44)); background = rounded(Color.rgb(252, 235, 231), 12) }, LinearLayout.LayoutParams(-1, dp(49)))
+            }, LinearLayout.LayoutParams(-1, dp(48)))
         })
     }
     private fun startTask() = safe {
@@ -196,6 +235,7 @@ class MainActivity : Activity() {
         if (!::wirelessStatus.isInitialized) return
         wirelessStatus.text = state.status
         wirelessConnect.isEnabled = !state.connecting && !state.connected
+        updateTaskSetup()
     }
     private fun requestNotifications() {
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10) else toast("此系统无需单独授予通知权限")
@@ -216,7 +256,8 @@ class MainActivity : Activity() {
     }
     private fun readSettings() = ModelSettings(url.text.toString(), key.text.toString(), model.text.toString()).also { it.endpoint() }
     private fun loadSettings() = safe {
-        SettingsStore(this).load()?.let { url.setText(it.baseUrl); key.setText(it.apiKey); model.setText(it.model); modelStatus.text = "已加载保存的配置" }
+        SettingsStore(this).load()?.let { url.setText(it.baseUrl); key.setText(it.apiKey); model.setText(it.model); modelStatus.text = "已加载保存的配置"; modelConfigured = true }
+        updateTaskSetup()
     }
     private fun testConnection() = safe {
         if (testing != null) return@safe
@@ -229,26 +270,43 @@ class MainActivity : Activity() {
     }
     private fun renderState(state: TaskViewState) {
         if (!::status.isInitialized) return
-        status.text = state.status; start.isEnabled = !state.running
+        status.text = state.status; start.isEnabled = !state.running; stop.isEnabled = state.running
         if (state.result.isNotBlank()) result.text = state.result
         else if (state.running) result.text = "任务进行中，可从通知栏停止。返回本页可能中断任务。"
+        result.setTextColor(if (state.result.isNotBlank()) ink else muted)
         val modelMs = state.events.filter { it.phase == "model" }.sumOf { it.durationMs }
         val toolMs = state.events.filter { it.phase == "tool" }.sumOf { it.durationMs }
         val rounds = state.events.maxOfOrNull { it.round } ?: 0
         val modelRequests = state.events.count { it.phase == "model" }
         val toolCalls = state.events.count { it.phase == "tool" }
         val totalMs = state.events.maxOfOrNull { it.elapsedMs } ?: 0
-        if (rounds > 0) timings.text = "模型 $modelRequests 次 · 工具 $toolCalls 次 · 总计 ${"%.1f".format(totalMs / 1000.0)} s\n模型 ${"%.1f".format(modelMs / 1000.0)} s · 手机 ${"%.1f".format(toolMs / 1000.0)} s"
+        timings.visibility = if (rounds > 0) View.VISIBLE else View.GONE
+        if (rounds > 0) timings.text = "总用时 ${"%.1f".format(totalMs / 1000.0)} 秒 · 模型 $modelRequests 次 · 操作 $toolCalls 次\n模型 ${"%.1f".format(modelMs / 1000.0)} 秒 · 手机 ${"%.1f".format(toolMs / 1000.0)} 秒"
     }
     private fun updateDeviceStatus() {
-        if (!::deviceStatus.isInitialized) return
+        if (!::accessibilityStatus.isInitialized) return
         val stopped = getSharedPreferences("safety", MODE_PRIVATE).getBoolean("stopped", true)
         val notifications = if (Build.VERSION.SDK_INT >= 33) checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED else true
-        deviceStatus.text = "无障碍服务   ${if (AgentAccessibilityService.instance != null) "已连接 ✓" else "待开启"}\n自动化权限   ${if (stopped) "已停止" else "已允许 ✓"}\n任务通知      ${if (notifications) "已允许 ✓" else "待允许"}"
+        accessibilityStatus.text = if (AgentAccessibilityService.instance != null) "已开启" else "未开启"
+        automationStatus.text = if (stopped) "已停止" else "已允许"
+        notificationStatus.text = if (notifications) "已允许" else "待允许"
+        updateTaskSetup()
+    }
+    private fun updateTaskSetup() {
+        if (!::taskModelState.isInitialized) return
+        taskModelState.text = if (modelConfigured) "模型 · 已设置" else "模型 · 待设置"
+        val stopped = getSharedPreferences("safety", MODE_PRIVATE).getBoolean("stopped", true)
+        val notifications = Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        taskDeviceState.text = when {
+            WirelessState.value.connected || WirelessState.value.connecting -> "设备 · 电脑连接"
+            AgentAccessibilityService.instance != null && !stopped && notifications -> "设备 · 已就绪"
+            else -> "设备 · 待授权"
+        }
     }
     private fun selectTab(index: Int) {
         body.removeAllViews(); body.addView(listOf(taskPage, modelPage, devicePage)[index])
-        tabs.forEachIndexed { i, b -> b.setTextColor(if (i == index) Color.WHITE else muted); b.background = rounded(if (i == index) green else Color.WHITE, 12) }
+        tabs.forEachIndexed { i, b -> b.isSelected = i == index; b.setTextColor(buttonTextColors(if (i == index) Color.WHITE else muted)); b.background = buttonBackground(i == index, navigation = true) }
+        (body.parent as? ScrollView)?.scrollTo(0, 0)
         updateDeviceStatus()
     }
     override fun onStart() { super.onStart(); TaskState.observe(observer); WirelessState.observe(wirelessObserver) }
@@ -264,22 +322,67 @@ class MainActivity : Activity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
     private fun row() = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-    private fun rounded(color: Int, radius: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(radius).toFloat() }
+    private fun rounded(color: Int, radius: Int, stroke: Int? = null, strokeWidth: Int = 1) = GradientDrawable().apply {
+        setColor(color); cornerRadius = dp(radius).toFloat()
+        if (stroke != null) setStroke(dp(strokeWidth), stroke)
+    }
     private fun label(value: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
         text = value; textSize = size; setTextColor(color); includeFontPadding = false; setLineSpacing(dp(4).toFloat(), 1f)
-        if (bold) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        typeface = Typeface.create(if (bold) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
     }
-    private fun card() = column().apply { background = rounded(Color.WHITE, 20); setPadding(dp(20), dp(20), dp(20), dp(20)); layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) } }
-    private fun button(value: String, primary: Boolean, action: () -> Unit) = Button(this).apply {
+    private fun pageTitle(value: String) = label(value, 27f, ink, true).apply { setPadding(0, 0, 0, dp(20)) }
+    private fun badge(value: String) = label(value, 12f, muted, true).apply { background = rounded(cardSurface, 20); setPadding(dp(10), dp(6), dp(10), dp(6)) }
+    private fun sectionTitle(value: String, suffix: String) = row().apply {
+        addView(label(value, 17f, ink, true), LinearLayout.LayoutParams(0, -2, 1f))
+        addView(badge(suffix))
+    }
+    private fun divider() = View(this).apply { setBackgroundColor(border) }
+    private fun permissionRow(title: String, state: TextView, action: Button) = row().apply {
+        addView(column().apply {
+            addView(label(title, 15f, ink, true))
+            addView(state.apply { setPadding(0, dp(5), 0, 0) })
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+        addView(action, LinearLayout.LayoutParams(dp(112), dp(48)))
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) }
+    }
+    private fun card(outlined: Boolean = false) = column().apply {
+        background = rounded(if (outlined) Color.WHITE else cardSurface, 16, if (outlined) border else null)
+        setPadding(dp(20), dp(20), dp(20), dp(20))
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) }
+    }
+    private fun buttonTextColors(enabledColor: Int) = ColorStateList(
+        arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+        intArrayOf(Color.rgb(163, 163, 163), enabledColor)
+    )
+    private fun buttonBackground(primaryButton: Boolean, dangerButton: Boolean = false, navigation: Boolean = false): Drawable {
+        val fill = when { primaryButton -> primary; dangerButton -> Color.rgb(255, 244, 243); navigation -> Color.TRANSPARENT; else -> Color.WHITE }
+        val outline = when { primaryButton -> primary; dangerButton -> Color.rgb(247, 213, 209); navigation -> Color.TRANSPARENT; else -> border }
+        val states = StateListDrawable().apply {
+            addState(intArrayOf(-android.R.attr.state_enabled), rounded(Color.rgb(235, 235, 235), 28))
+            addState(intArrayOf(android.R.attr.state_focused), rounded(fill, 28, if (dangerButton) danger else primary, 2))
+            addState(intArrayOf(), rounded(fill, 28, outline))
+        }
+        return RippleDrawable(ColorStateList.valueOf(if (primaryButton) Color.argb(48, 255, 255, 255) else Color.argb(24, 2, 133, 247)), states, rounded(Color.WHITE, 28))
+    }
+    private fun button(value: String, primary: Boolean, dangerButton: Boolean = false, action: () -> Unit) = Button(this).apply {
         text = value; textSize = 14f; isAllCaps = false; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        setTextColor(if (primary) Color.WHITE else green); background = rounded(if (primary) green else Color.rgb(235, 245, 237), 12)
-        filterTouchesWhenObscured = true; minHeight = 0; minWidth = 0; elevation = 0f; setPadding(dp(12), 0, dp(12), 0)
+        setTextColor(buttonTextColors(if (primary) Color.WHITE else if (dangerButton) danger else ink)); background = buttonBackground(primary, dangerButton)
+        filterTouchesWhenObscured = true; minHeight = 0; minWidth = 0; minimumHeight = 0; minimumWidth = 0
+        elevation = 0f; stateListAnimator = null; includeFontPadding = false; setPadding(dp(12), 0, dp(12), 0)
+        gravity = Gravity.CENTER; isAllCaps = false
         setOnClickListener { action() }
     }
     private fun input(hintValue: String, multiline: Boolean = false) = EditText(this).apply {
-        hint = hintValue; textSize = 15f; setTextColor(ink); setHintTextColor(Color.rgb(138, 153, 145)); isSaveEnabled = false
+        hint = hintValue; textSize = 15f; setTextColor(ink); setHintTextColor(Color.rgb(132, 132, 132)); isSaveEnabled = false
+        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
         inputType = InputType.TYPE_CLASS_TEXT or if (multiline) InputType.TYPE_TEXT_FLAG_MULTI_LINE else InputType.TYPE_TEXT_VARIATION_NORMAL
-        setSingleLine(!multiline); gravity = Gravity.TOP or Gravity.START; setPadding(dp(10), dp(13), dp(10), dp(13)); background = rounded(surface, 10)
+        setSingleLine(!multiline); gravity = if (multiline) Gravity.TOP or Gravity.START else Gravity.CENTER_VERTICAL or Gravity.START
+        setPadding(dp(14), dp(14), dp(14), dp(14)); minHeight = dp(48)
+        background = StateListDrawable().apply {
+            addState(intArrayOf(-android.R.attr.state_enabled), rounded(cardSurface, 12, border))
+            addState(intArrayOf(android.R.attr.state_focused), rounded(Color.WHITE, 12, primary, 2))
+            addState(intArrayOf(), rounded(Color.WHITE, 12, border))
+        }
         if (Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
     }
