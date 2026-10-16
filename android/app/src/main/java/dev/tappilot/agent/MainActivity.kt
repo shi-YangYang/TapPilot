@@ -69,7 +69,7 @@ class MainActivity : Activity() {
         }
         val brand = row()
         brand.addView(label("T", 26f, Color.WHITE, true).apply { gravity = Gravity.CENTER; background = rounded(green, 15); setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        brand.addView(column().apply { setPadding(dp(12), 0, 0, 0); addView(label("TapPilot", 25f, ink, true)); addView(label("你的手机，由你指挥", 12f, muted)) })
+        brand.addView(column().apply { setPadding(dp(12), 0, 0, 0); addView(label("TapPilot", 25f, ink, true)) })
         root.addView(brand)
         val navigation = row().apply { setPadding(0, dp(24), 0, dp(18)) }
         listOf("任务", "模型", "设备").forEachIndexed { index, name ->
@@ -86,36 +86,34 @@ class MainActivity : Activity() {
         loadSettings()
     }
     private fun buildTaskPage() = column().apply {
-        addView(label("今天，想让手机做什么？", 23f, ink, true))
-        addView(label("配置你信任的模型，直接在手机运行。", 14f, muted).apply { setPadding(0, dp(8), 0, dp(20)) })
+        addView(label("想让手机做什么？", 23f, ink, true).apply { setPadding(0, 0, 0, dp(20)) })
         addView(card().apply {
-            task = input("例如：打开系统设置，找到电池页面，告诉我当前显示了什么。", multiline = true).apply { id = R.id.task_input; minLines = 4; maxLines = 7 }
+            task = input("例如：打开设置，查看电池信息", multiline = true).apply { id = R.id.task_input; minLines = 4; maxLines = 7 }
             addView(task, LinearLayout.LayoutParams(-1, -2))
-            addView(label("运行时会回到桌面，模型再根据界面逐步操作。", 12f, muted).apply { setPadding(0, dp(12), 0, dp(14)) })
+            addView(label("开始后将返回桌面自动操作。", 12f, muted).apply { setPadding(0, dp(12), 0, dp(14)) })
             start = button("开始任务", true, ::startTask).apply { id = R.id.task_start }
             addView(start, LinearLayout.LayoutParams(-1, dp(50)))
         })
         addView(card().apply {
-            addView(label("运行状态", 13f, muted, true))
             status = label("准备就绪", 18f, ink, true).apply { id = R.id.task_status; setPadding(0, dp(10), 0, dp(10)) }; addView(status)
-            timings = label("模型与手机操作耗时会分别显示在这里。", 12f, muted); addView(timings)
-            result = label("先在“模型”页保存配置，再在“设备”页开启无障碍与自动化权限。", 14f, ink).apply { setPadding(0, dp(16), 0, dp(8)); setTextIsSelectable(true) }; addView(result)
+            timings = label("", 12f, muted); addView(timings)
+            result = label("首次使用：先配置模型，再开启设备权限。", 14f, ink).apply { setPadding(0, dp(16), 0, dp(8)); setTextIsSelectable(true) }; addView(result)
             addView(button("停止当前任务", false) { AgentTaskService.cancelActive() }, LinearLayout.LayoutParams(-1, dp(46)))
         })
-        addView(label("任务与界面只保留在本次运行内存中。当前界面会发送给你配置的模型服务商；请先确认信任。付款、发送、删除等敏感提交请手动完成。", 12f, muted).apply { setPadding(dp(4), dp(6), dp(4), dp(22)) })
+        addView(label("界面会发送给所选模型，请确认信任。本机不保存任务记录。付款、发送、删除等操作需手动完成。", 12f, muted).apply { setPadding(dp(4), dp(6), dp(4), dp(22)) })
     }
     private fun buildModelPage() = column().apply {
-        addView(label("连接你的模型", 23f, ink, true))
-        addView(label("支持带工具调用能力的 OpenAI 兼容接口。", 14f, muted).apply { setPadding(0, dp(8), 0, dp(20)) })
+        addView(label("模型设置", 23f, ink, true))
+        addView(label("需支持工具调用的 OpenAI 兼容 HTTPS 接口。", 14f, muted).apply { setPadding(0, dp(8), 0, dp(20)) })
         addView(card().apply {
             addView(label("API 地址", 13f, muted, true))
             url = input("https://你的服务地址/v1").apply { id = R.id.model_url; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI }; addView(url)
             addView(label("模型名称", 13f, muted, true).apply { setPadding(0, dp(18), 0, 0) })
-            model = input("服务商提供的 model ID").apply { id = R.id.model_name }; addView(model)
-            addView(label("API Key", 13f, muted, true).apply { setPadding(0, dp(18), 0, 0) })
-            key = input("填写你的 API Key").apply { id = R.id.model_key; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }; addView(key)
-            addView(label("配置经 Android Keystore 加密保存。不会写入日志或备份。无鉴权的自托管 HTTPS 接口可留空 Key。", 12f, muted).apply { setPadding(0, dp(12), 0, dp(16)) })
-            addView(button("保存配置", true) { safe { SettingsStore(this@MainActivity).save(readSettings()); modelStatus.text = "配置已加密保存" } }.apply { id = R.id.model_save }, LinearLayout.LayoutParams(-1, dp(48)))
+            model = input("填写服务商提供的模型名称").apply { id = R.id.model_name }; addView(model)
+            addView(label("密钥（API Key）", 13f, muted, true).apply { setPadding(0, dp(18), 0, 0) })
+            key = input("粘贴 API Key").apply { id = R.id.model_key; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }; addView(key)
+            addView(label("配置仅加密保存在本机。无需密钥的服务可留空。", 12f, muted).apply { setPadding(0, dp(12), 0, dp(16)) })
+            addView(button("保存配置", true) { safe { SettingsStore(this@MainActivity).save(readSettings()); modelStatus.text = "已保存" } }.apply { id = R.id.model_save }, LinearLayout.LayoutParams(-1, dp(48)))
             addView(button("测试连接", false, ::testConnection).apply { id = R.id.model_test }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
             modelStatus = label("尚未测试", 13f, muted).apply { setPadding(0, dp(14), 0, 0) }; addView(modelStatus)
         })
@@ -125,23 +123,22 @@ class MainActivity : Activity() {
         })
     }
     private fun buildDevicePage() = column().apply {
-        addView(label("让手机准备好", 23f, ink, true))
-        addView(label("手机独立运行，或通过 Wi-Fi 连接电脑。", 14f, muted).apply { setPadding(0, dp(8), 0, dp(20)) })
+        addView(label("连接与权限", 23f, ink, true).apply { setPadding(0, 0, 0, dp(20)) })
         addView(card().apply {
             addView(label("无线连接电脑", 18f, ink, true))
-            addView(label("手机与电脑连接同一局域网。在电脑端打开无线配对，再扫码或粘贴配对地址。", 12f, muted).apply { setPadding(0, dp(10), 0, dp(12)) })
+            addView(label("连接同一 Wi-Fi，在电脑设备页点击“显示二维码”，再扫码。", 12f, muted).apply { setPadding(0, dp(10), 0, dp(12)) })
             wirelessStatus = label("尚未连接电脑", 13f, muted).apply { id = R.id.wireless_status }; addView(wirelessStatus)
             addView(button("扫描电脑二维码", true, ::scanPairing).apply { id = R.id.wireless_scan }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(14) })
-            pairingInput = input("或粘贴 tappilot://pair?... 配对地址").apply { id = R.id.wireless_pairing; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }; addView(pairingInput)
-            wirelessConnect = button("连接 / 重新连接", false, ::connectWireless).apply { id = R.id.wireless_connect }
+            pairingInput = input("或粘贴电脑端配对地址").apply { id = R.id.wireless_pairing; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }; addView(pairingInput)
+            wirelessConnect = button("连接电脑", false, ::connectWireless).apply { id = R.id.wireless_connect }
             addView(wirelessConnect, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
             addView(button("断开电脑", false) { WirelessService.disconnectActive() }, LinearLayout.LayoutParams(-1, dp(45)).apply { topMargin = dp(6) })
-            addView(label("配对只保留在内存；应用进程重启后需重新扫码。连接电脑期间，手机端任务暂停使用。密钥不会发送给模型。", 12f, muted).apply { setPadding(0, dp(12), 0, 0) })
+            addView(label("应用重启后需重新配对。连接电脑时，不能启动手机端任务。", 12f, muted).apply { setPadding(0, dp(12), 0, 0) })
         })
         addView(card().apply {
             deviceStatus = label("", 15f, ink).apply { setPadding(0, 0, 0, dp(18)) }; addView(deviceStatus)
             addView(button("1  开启无障碍服务", true) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }, LinearLayout.LayoutParams(-1, dp(49)))
-            addView(label("在系统设置中找到“TapPilot 手机自动化”，阅读权限说明并手动开启。若系统提示受限设置，请按系统提供的流程处理。", 12f, muted).apply { setPadding(0, dp(10), 0, dp(16)) })
+            addView(label("在系统设置中开启“TapPilot 手机自动化”；若提示“受限设置”，按系统指引处理。", 12f, muted).apply { setPadding(0, dp(10), 0, dp(16)) })
             addView(button("2  允许自动化 / 恢复", false) {
                 safe {
                     val service = AgentAccessibilityService.instance ?: throw AgentError("SERVICE_UNAVAILABLE", "请先开启无障碍服务，再允许自动化")
@@ -151,13 +148,12 @@ class MainActivity : Activity() {
             addView(button("3  允许任务通知", false) { requestNotifications() }, LinearLayout.LayoutParams(-1, dp(49)).apply { topMargin = dp(8) })
         })
         addView(card().apply {
-            addView(label("随时掌握控制权", 18f, ink, true))
-            addView(label("任务进行时可从通知栏停止。紧急停止会同时禁止手机端及电脑端继续操作，只能由你在这里恢复。", 13f, muted).apply { setPadding(0, dp(10), 0, dp(16)) })
+            addView(label("停止与恢复", 18f, ink, true))
+            addView(label("通知栏可停止任务。急停后所有自动化都将停止，需在本页点击“允许自动化 / 恢复”。", 13f, muted).apply { setPadding(0, dp(10), 0, dp(16)) })
             addView(button("紧急停止所有自动化", false) {
                 safe { AgentAccessibilityService.latchEmergencyStop(this@MainActivity); updateDeviceStatus() }
             }.apply { setTextColor(Color.rgb(167, 56, 44)); background = rounded(Color.rgb(252, 235, 231), 12) }, LinearLayout.LayoutParams(-1, dp(49)))
         })
-        addView(label("兼容电脑：原有 ADB / MCP 接口仍可使用。手机客户端直接调用原生控制服务，不依赖 Codex。", 12f, muted).apply { setPadding(dp(4), dp(4), dp(4), dp(20)) })
     }
     private fun startTask() = safe {
         if (TaskState.value.running) return@safe
@@ -193,7 +189,7 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         val result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data)
         if (result != null) {
-            result.contents?.let { content -> safe { WirelessState.pairing = PairingInfo.parse(content); pairingInput.setText(""); WirelessState.publish(WirelessViewState(status = "配对码已读取，点击“连接”完成配对")); selectTab(2) } }
+            result.contents?.let { content -> safe { WirelessState.pairing = PairingInfo.parse(content); pairingInput.setText(""); WirelessState.publish(WirelessViewState(status = "已扫码，请点击“连接电脑”")); selectTab(2) } }
         } else super.onActivityResult(requestCode, resultCode, data)
     }
     private fun renderWireless(state: WirelessViewState) {
@@ -220,12 +216,12 @@ class MainActivity : Activity() {
     }
     private fun readSettings() = ModelSettings(url.text.toString(), key.text.toString(), model.text.toString()).also { it.endpoint() }
     private fun loadSettings() = safe {
-        SettingsStore(this).load()?.let { url.setText(it.baseUrl); key.setText(it.apiKey); model.setText(it.model); modelStatus.text = "已加载本机加密配置" }
+        SettingsStore(this).load()?.let { url.setText(it.baseUrl); key.setText(it.apiKey); model.setText(it.model); modelStatus.text = "已加载保存的配置" }
     }
     private fun testConnection() = safe {
         if (testing != null) return@safe
         val client = ModelClient(readSettings()); testing = client
-        modelStatus.text = "正在测试 HTTPS 连接…"
+        modelStatus.text = "正在测试连接…"
         worker.execute {
             val message = try { client.testConnection() } catch (error: Exception) { if (error is AgentError) "${error.code} · ${error.message}" else "连接测试失败" }
             runOnUiThread { testing = null; if (!isDestroyed) modelStatus.text = message }
@@ -235,7 +231,7 @@ class MainActivity : Activity() {
         if (!::status.isInitialized) return
         status.text = state.status; start.isEnabled = !state.running
         if (state.result.isNotBlank()) result.text = state.result
-        else if (state.running) result.text = "任务正在目标应用中执行。可从通知停止；返回控制页可能使下一次读取暂停。"
+        else if (state.running) result.text = "任务进行中，可从通知栏停止。返回本页可能中断任务。"
         val modelMs = state.events.filter { it.phase == "model" }.sumOf { it.durationMs }
         val toolMs = state.events.filter { it.phase == "tool" }.sumOf { it.durationMs }
         val rounds = state.events.maxOfOrNull { it.round } ?: 0

@@ -11,80 +11,80 @@
 <body>
   <div class="titlebar"></div>
   <aside class="sidebar">
-    <div class="brand"><span class="brand-mark">t<span>↗</span></span><div>TapPilot<small>手机，自然听懂你。</small></div></div>
-    <div class="nav-label">工作空间</div>
+    <div class="brand"><span class="brand-mark">t<span>↗</span></span><div>TapPilot</div></div>
     <nav aria-label="主导航">
-      <button class="nav-item active" data-page="task" aria-current="page"><span>✦</span>任务<span class="nav-shortcut">01</span></button>
-      <button class="nav-item" data-page="model"><span>◈</span>模型<span class="nav-shortcut">02</span></button>
-      <button class="nav-item" data-page="device"><span>▯</span>设备<span class="nav-shortcut">03</span></button>
+      <button class="nav-item active" data-page="task" aria-current="page"><span>✦</span>任务</button>
+      <button class="nav-item" data-page="model"><span>◈</span>模型</button>
+      <button class="nav-item" data-page="device"><span>▯</span>设备</button>
     </nav>
     <div class="sidebar-bottom">
-      <button id="emergency-button" class="emergency">■ 紧急停止手机操作</button><p class="emergency-help">急停后须在手机端手动恢复。</p>
-      <div class="local-note"><span class="status-dot"></span>任务记录仅保留在本次会话</div>
-      <div class="sidebar-meta"><span id="version">TapPilot</span><span>DESKTOP</span></div>
+      <button id="emergency-button" class="emergency">■ 紧急停止</button><p class="emergency-help">急停后，请在手机上恢复。</p>
+      <div class="local-note"><span class="status-dot"></span>退出后清除任务记录</div>
+      <div class="sidebar-meta"><span id="version">TapPilot</span></div>
     </div>
   </aside>
   <main>
-    <header class="topbar"><div class="breadcrumb">你的工作空间 <span>/</span> <strong id="page-title">任务</strong></div><div class="connection-pill"><span class="status-dot muted" id="connection-dot"></span><span id="connection-label">尚未选择手机</span></div></header>
+    <header class="topbar"><div class="breadcrumb"><strong id="page-title">任务</strong></div><div class="connection-pill"><span class="status-dot muted" id="connection-dot"></span><span id="connection-label">未选择手机</span></div></header>
     <div id="notice" class="notice" role="status" hidden></div>
 
     <section id="page-task" class="page">
-      <div class="page-heading"><div><div class="eyebrow">LESS TAPPING. MORE DOING.</div><h1>说出任务，交给手机。</h1><p>连接你的模型，让 TapPilot 理解界面并完成操作。</p></div><span class="heading-art">✳</span></div>
-      <div id="demo-banner" class="demo-banner" hidden>演示模式 · 合成界面与模拟过程，不会操作真实手机或请求模型。</div>
+      <div class="page-heading"><h1>新任务</h1></div>
+      <div id="demo-banner" class="demo-banner" hidden>演示模式：模拟数据，不操作手机、不调用模型。</div>
       <div class="workspace-grid">
         <div class="main-column">
           <div class="composer card">
-            <label for="task-input" class="section-label">这次想做什么？</label>
-            <textarea id="task-input" rows="4" maxlength="8000" placeholder="打开系统设置，进入电池页面，告诉我当前显示了什么。"></textarea>
-            <div class="composer-footer"><span id="model-label">先配置一个模型</span><button id="run-button" class="primary">开始任务 <span>↗</span></button></div>
+            <label for="task-input" class="section-label">让手机做什么？</label>
+            <textarea id="task-input" rows="4" maxlength="8000" placeholder="例如：打开设置，查看电池信息。"></textarea>
+            <div class="composer-footer"><span id="model-label">未配置模型</span><button id="run-button" class="primary">开始任务 <span>↗</span></button></div>
           </div>
-          <p class="authorization-note">开始即授权执行本次任务。手机界面信息会发送给你配置的模型服务。</p>
+          <p class="authorization-note">开始后将操作手机，并把必要的界面信息发送给所选模型服务。</p>
           <div class="suggestions"><button data-prompt="打开系统设置，进入电池页面，告诉我当前显示了什么。">↗ 查看电池信息</button><button data-prompt="读取当前手机界面，简要总结当前可见内容，不进行任何点击。">↗ 总结当前界面</button><button id="demo-button">◌ 体验演示</button></div>
 
           <div class="card progress-card">
             <div class="card-header"><div><span class="section-label">执行过程</span><span id="run-badge" class="badge">待开始</span></div><button id="cancel-button" class="quiet" disabled>取消任务</button></div>
-            <div id="empty-state" class="empty-state"><div class="empty-symbol">↗</div><h3>每一步，都有迹可循</h3><p>观察界面、选择操作、确认结果。<br>开始后会在这里显示执行进度。</p></div>
+            <div id="empty-state" class="empty-state"><div class="empty-symbol">↗</div><p>开始后显示进度和结果。</p></div>
             <ol id="timeline" class="timeline" aria-live="polite"></ol>
             <div id="answer-panel" class="answer-panel" hidden><div class="section-label" id="answer-heading">任务结果</div><div id="answer" class="answer"></div></div>
           </div>
         </div>
         <aside class="details-column">
-          <div class="card phone-card"><div class="section-label">当前设备</div><div class="phone-illustration"><div class="phone-speaker"></div><div class="phone-screen"><span>t↗</span><small id="phone-state">等待连接</small></div></div><h3 id="device-title">连接你的 Android</h3><p id="device-description">在设备页选择已授权的手机，<br>即可开始执行任务。</p><button class="text-button" data-goto="device">管理设备 <span>→</span></button></div>
-          <div class="card metrics-card"><div class="section-label">本次耗时</div><div class="total-time"><span id="metric-total">—</span><small>秒</small></div><div class="metric-row"><span>模型决策</span><strong id="metric-model">—</strong></div><div class="metric-row"><span>手机操作</span><strong id="metric-tool">—</strong></div><div class="metric-row"><span>模型请求 / 工具调用</span><strong id="metric-rounds">—</strong></div></div>
+          <div class="card phone-card"><div class="section-label">当前手机</div><div class="phone-illustration"><div class="phone-speaker"></div><div class="phone-screen"><span>t↗</span><small id="phone-state">等待连接</small></div></div><h3 id="device-title">未连接手机</h3><p id="device-description">先到设备页连接手机。</p><button class="text-button" data-goto="device">选择手机 <span>→</span></button></div>
+          <div class="card metrics-card"><div class="section-label">本次耗时</div><div class="total-time"><span id="metric-total">—</span><small>秒</small></div><details class="help-details"><summary>耗时明细</summary><div class="metric-row"><span>模型思考</span><strong id="metric-model">—</strong></div><div class="metric-row"><span>手机操作</span><strong id="metric-tool">—</strong></div><div class="metric-row"><span>模型请求 / 工具调用</span><strong id="metric-rounds">—</strong></div></details></div>
         </aside>
       </div>
     </section>
 
     <section id="page-model" class="page" hidden>
-      <div class="page-heading"><div><div class="eyebrow">YOUR MODEL. YOUR CHOICE.</div><h1>选择你的智能引擎。</h1><p>支持提供工具调用能力的 OpenAI 兼容接口，也支持本机模型。</p></div><span class="heading-art">◈</span></div>
-      <div class="settings-grid"><form id="model-form" class="card settings-card">
-        <div class="card-header"><span class="section-label">模型连接</span><span class="badge">OPENAI 兼容</span></div>
-        <label for="base-url">API 地址</label><input id="base-url" type="url" placeholder="https://api.example.com/v1" maxlength="2048" autocomplete="off" required><p class="field-hint">使用服务商提供的地址；本机服务可填写 http://localhost:端口/v1。</p>
+      <div class="page-heading"><div><h1>模型设置</h1><p>需要支持工具调用的 OpenAI 兼容接口。</p></div></div>
+      <div class="settings-single"><form id="model-form" class="card settings-card">
+        <label for="base-url">API 地址</label><input id="base-url" type="url" placeholder="https://api.example.com/v1" maxlength="2048" autocomplete="off" required>
         <label for="model-name">模型名称</label><input id="model-name" type="text" placeholder="填写服务商提供的模型 ID" maxlength="200" autocomplete="off" required>
-        <label for="api-key">API Key <span id="key-status" class="subtle">尚未保存</span></label><input id="api-key" type="password" placeholder="输入密钥" maxlength="8192" autocomplete="new-password"><p class="field-hint">通过 macOS 钥匙串加密保存。同一服务地址留空保留密钥；更换域名或端口会清除旧密钥。本机无鉴权服务可留空。</p>
+        <label for="api-key">API Key <span id="key-status" class="subtle">尚未保存</span></label><input id="api-key" type="password" placeholder="输入密钥" maxlength="8192" autocomplete="new-password"><p class="field-hint">密钥加密保存在本机；同一服务留空可保留密钥。</p>
         <label class="checkbox-row"><input id="clear-key" type="checkbox">清除已保存的密钥</label>
         <div class="form-actions"><button id="save-model" class="primary" type="submit">保存配置</button><button id="test-model" class="secondary" type="button">测试连接</button></div>
         <p id="model-test-result" class="inline-result" role="status"></p>
-      </form><div class="settings-notes"><div class="note-number">01 / 独立运行</div><h3>不需要 Codex。</h3><p>TapPilot 自己管理任务循环。模型负责判断，客户端负责执行、验证和停止。</p><div class="note-number">02 / 数据流向</div><h3>由你选择模型服务。</h3><p>任务及必要的手机界面信息会发送到此地址。API Key 只保存在本机，不会回传到界面。</p><div class="note-number">03 / 能力差异</div><h3>连接成功，只是第一步。</h3><p>不同模型的工具调用和界面理解能力不同。先用“读取当前界面”验证实际效果。</p></div></div>
+        <p class="field-hint">任务和必要的手机界面信息会发送到此服务。</p>
+        <details class="help-details"><summary>填写说明</summary><p>地址和模型名称由服务商提供。本机模型可用 http://localhost:端口/v1，无鉴权时密钥可留空。</p><p>更换地址的域名或端口会清除旧密钥，请填写新服务的密钥。测试连接成功后，可先运行“总结当前界面”。</p></details>
+      </form></div>
     </section>
 
     <section id="page-device" class="page" hidden>
-      <div class="page-heading"><div><div class="eyebrow">ONE PHONE. MANY POSSIBILITIES.</div><h1>让手机准备就绪。</h1><p>同一局域网内扫码配对，告别数据线和 USB 调试。</p></div><span class="heading-art">⌁</span></div>
-      <div class="connection-tabs" role="group" aria-label="连接方式"><button id="mode-wireless" class="active">⌁ 无线连接 <span>推荐</span></button><button id="mode-usb">▯ USB 开发通道</button></div>
-      <div class="settings-grid"><div>
+      <div class="page-heading"><h1>连接手机</h1></div>
+      <div class="connection-tabs" role="group" aria-label="连接方式"><button id="mode-wireless" class="active">⌁ 无线 <span>推荐</span></button><button id="mode-usb">▯ USB</button></div>
+      <div class="settings-single">
         <div id="wireless-panel" class="card settings-card">
-          <div class="card-header"><span class="section-label">局域网配对</span><span id="wireless-badge" class="badge">尚未开启</span></div>
-          <p class="field-hint">电脑和手机连接同一个 Wi-Fi。只在点击开始后开放当前会话，退出客户端即失效。</p>
-          <label for="lan-address">电脑的局域网地址</label><div class="lan-picker"><select id="lan-address" aria-label="局域网地址"><option value="">请刷新网络地址</option></select><button id="refresh-lan" class="secondary small">刷新</button></div>
-          <p id="lan-hint" class="field-hint">选择手机能够访问的网卡地址。</p>
-          <div class="form-actions"><button id="start-pairing" class="primary">开始无线配对</button><button id="stop-pairing" class="secondary" disabled>断开会话</button></div>
-          <div id="pairing-panel" class="pairing-panel" hidden><img id="pairing-qr" width="260" height="260" alt="TapPilot 本次会话配对二维码"><strong>用手机 TapPilot 扫描二维码</strong><p id="pairing-expiry" class="field-hint"></p><button id="copy-pairing" class="text-button">复制配对链接 →</button><details><summary>手动输入链接</summary><textarea id="pairing-link" readonly aria-label="配对链接"></textarea></details><p class="pairing-private">二维码包含本次配对凭据，仅分享给你自己的手机。</p></div>
+          <div class="card-header"><span class="section-label">扫码连接</span><span id="wireless-badge" class="badge">尚未开启</span></div>
+          <p class="field-hint">电脑和手机连接同一个 Wi-Fi。</p>
+          <label for="lan-address">电脑地址</label><div class="lan-picker"><select id="lan-address" aria-label="局域网地址"><option value="">请刷新网络地址</option></select><button id="refresh-lan" class="secondary small">刷新</button></div>
+          <p id="lan-hint" class="field-hint">选择当前 Wi-Fi 的地址。</p>
+          <div class="form-actions"><button id="start-pairing" class="primary">显示二维码</button><button id="stop-pairing" class="secondary" disabled>断开</button></div>
+          <div id="pairing-panel" class="pairing-panel" hidden><img id="pairing-qr" width="260" height="260" alt="TapPilot 配对二维码"><strong>用手机 TapPilot 扫码</strong><p id="pairing-expiry" class="field-hint"></p><button id="copy-pairing" class="text-button">复制配对链接 →</button><details><summary>手动输入链接</summary><textarea id="pairing-link" readonly aria-label="配对链接"></textarea></details><p class="pairing-private">二维码仅供你自己的手机使用。</p></div>
           <div id="wireless-device" class="wireless-device" hidden><span class="wireless-device-icon">⌁</span><div><strong id="wireless-device-name"></strong><p id="wireless-device-status"></p></div><button id="select-wireless" class="secondary small">选择此手机</button></div>
-          <p id="wireless-hint" class="field-hint">手机端需要开启无障碍服务并允许自动化，无需开发者模式。</p>
+          <p id="wireless-hint" class="field-hint">请先在手机 TapPilot 中开启无障碍服务并允许自动化。</p>
         </div>
-        <div id="usb-panel" class="card settings-card" hidden><div class="card-header"><span class="section-label">USB 设备</span><button id="refresh-devices" class="secondary small">刷新设备</button></div><div id="device-list" class="device-list"><p class="subtle">点击刷新以查找已连接的手机。</p></div><label for="adb-path">ADB 路径 <span class="subtle">可选</span></label><input id="adb-path" type="text" placeholder="自动寻找 Android SDK 中的 adb" maxlength="4096"><p class="field-hint">USB 开发通道需要已安装 Android platform-tools。填写完整路径即可自定义。</p><button id="save-device" class="secondary">保存设备设置</button></div>
-        <div class="card connection-guide"><div class="section-label">无线连接三步完成</div><ol><li><span>1</span><div><strong>打开手机端 TapPilot</strong><p>按引导开启无障碍服务，点击“允许自动化 / 恢复”。</p></div></li><li><span>2</span><div><strong>扫描二维码，连接电脑</strong><p>在手机“设备”页扫描，或粘贴配对链接。</p></div></li><li><span>3</span><div><strong>选择手机，开始任务</strong><p>保持手机解锁和连接，在电脑“任务”页输入需求。</p></div></li></ol></div>
-      </div><div class="settings-notes"><div class="note-number">无需数据线</div><h3>手机主动连接电脑。</h3><p>双方通过本次配对建立加密连接。配对二维码 5 分钟内有效，仅允许一台手机。</p><div class="note-number">控制权始终在你手中</div><h3>停止，不等模型回答。</h3><p>取消会结束任务并保留无线连接。急停会请求手机停止自动化，恢复须在手机端手动进行。</p><div class="note-number">会话结束后</div><h3>配对凭据不落盘。</h3><p>断开或退出后重新扫码。网络中断会结束当前任务，不会自动补做动作。USB 调试仅用于开发通道。</p></div></div>
+        <div id="usb-panel" class="card settings-card" hidden><div class="card-header"><span class="section-label">USB 手机</span><button id="refresh-devices" class="secondary small">刷新设备</button></div><div id="device-list" class="device-list"><p class="subtle">连接数据线后点击刷新。</p></div><details class="help-details"><summary>ADB 设置</summary><label for="adb-path">ADB 路径 <span class="subtle">可选</span></label><input id="adb-path" type="text" placeholder="自动查找，或填写完整路径" maxlength="4096"><p class="field-hint">USB 连接需开启调试授权，并在电脑安装 Android platform-tools。</p></details><button id="save-device" class="secondary">保存设备</button></div>
+        <details class="help-details connection-help"><summary>连接不上？</summary><p>在手机 TapPilot 中开启无障碍服务和自动化，再到“设备”页扫码。保持手机解锁。</p><p>无法连接时，检查同一 Wi-Fi、所选电脑地址及防火墙；二维码过期后，点击“断开”再重新生成。</p><p>配对仅本次有效，一次连接一台手机。退出或断开后重新扫码；网络中断会停止任务，不会自动补做动作。</p></details>
+      </div>
     </section>
   </main>
 </body>
