@@ -1,0 +1,14 @@
+@import "tailwindcss" source(none);
+@import "./beui/theme.css";
+@import "./app.css";
+@source "./";
+
+@font-face {
+  font-family: "Geist";
+  src: url("./Geist-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root { --font-geist-sans: "Geist"; }

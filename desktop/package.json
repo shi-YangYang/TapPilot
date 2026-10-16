@@ -1,12 +1,13 @@
 {
   "name": "tappilot-desktop",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "description": "TapPilot independent desktop phone agent",
   "type": "module",
   "main": "dist/main.cjs",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
     "start": "electron .",
     "dev": "npm run build && electron .",
     "test": "node --test test/*.test.mjs",
@@ -14,10 +15,22 @@
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "electron": "44.8.0",
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "postcss": "8.5.30",
+    "typescript": "5.9.3"
   },
   "dependencies": {
-    "qrcode": "1.5.4"
+    "@floating-ui/dom": "1.8.0",
+    "clsx": "2.1.1",
+    "lucide-react": "1.16.0",
+    "motion": "12.43.0",
+    "qrcode": "1.5.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tailwind-merge": "3.6.0"
   }
 }

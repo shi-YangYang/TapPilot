@@ -1,0 +1,74 @@
+/* App layout only. Component visuals and motion come from the vendored beUI source. */
+html { font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+body { margin: 0; background: var(--background); color: var(--foreground); -webkit-font-smoothing: antialiased; }
+[hidden] { display: none !important; }
+button, input, textarea, select, summary { -webkit-app-region: no-drag; }
+button:not(:disabled), summary { cursor: pointer; }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.window-drag { position: fixed; inset: 0 0 auto; height: 40px; -webkit-app-region: drag; z-index: 30; }
+.app-shell { min-height: 100vh; padding: 52px 36px 72px; }
+.app-header { max-width: 1000px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.brand { display: flex; align-items: baseline; gap: 9px; min-width: 150px; font-size: 16px; letter-spacing: -.4px; font-weight: 600; }
+.brand span { font-size: 10px; font-weight: 400; color: var(--muted-foreground); letter-spacing: 0; }
+.app-header > :last-child { min-width: 150px; justify-content: flex-end; }
+.app-main { width: 100%; max-width: 672px; margin: 0 auto; padding-top: 42px; }
+.task-page { padding-top: 48px; }
+.task-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 21px; }
+.task-heading h1 { margin: 0; font-size: 22px; font-weight: 550; letter-spacing: -.55px; }
+.run-status { font-size: 11px; color: var(--muted-foreground); white-space: nowrap; }
+.run-status[data-phase="running"] { color: var(--primary); }
+.run-status[data-phase="completed"] { color: #26805c; }
+.run-status[data-phase="failed"] { color: #a14b39; }
+.prompt-context { display: flex; align-items: center; min-width: 0; gap: 1px; }
+.privacy-caption { margin: 10px 3px 0; font-size: 11px; line-height: 1.7; color: var(--muted-foreground); }
+.task-suggestions { display: flex; align-items: center; gap: 7px; margin-top: 18px; }
+.task-empty { margin: 55px 0 0; font-size: 12px; color: var(--muted-foreground); text-align: center; }
+.task-activity { margin-top: 34px; }
+.task-answer { margin-top: 24px; }
+.task-answer h2 { font-size: 13px; font-weight: 550; margin: 0 0 10px; }
+#answer { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.85; }
+.help-details { margin: 18px 2px 0; color: var(--muted-foreground); font-size: 12px; }
+.help-details > summary { width: fit-content; border-radius: 4px; line-height: 1.9; }
+.help-details > summary::marker { font-size: 9px; }
+.help-details > p { margin-top: 10px; font-size: 12px; line-height: 1.85; overflow-wrap: anywhere; }
+.help-details > div { margin-top: 10px; }
+.metrics-details dl { margin: 12px 0 0; max-width: 320px; }
+.metrics-details dl > div { display: flex; justify-content: space-between; gap: 20px; padding: 6px 0; }
+.metrics-details dd { font-variant-numeric: tabular-nums; }
+.settings-page { padding-top: 13px; }
+.form-fields { display: flex; flex-direction: column; gap: 20px; }
+.key-details { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 10px 4px 0; font-size: 11px; color: var(--muted-foreground); }
+.key-details label { display: flex; align-items: center; gap: 6px; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
+.form-footer { flex-wrap: wrap; }
+.local-key { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; font-size: 11px; color: var(--muted-foreground); }
+.inline-result { margin: 0; font-size: 12px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.network-row { display: flex; align-items: center; gap: 10px; }
+.network-select { min-width: 0; flex: 1; }
+.field-hint { margin-top: 8px; font-size: 11px; line-height: 1.7; color: var(--muted-foreground); }
+.pairing-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 26px; align-items: center; margin-top: 24px; }
+.pairing-layout > img { width: 200px; height: 200px; border-radius: 12px; }
+.pairing-layout h3 { font-size: 14px; font-weight: 500; }
+#pairing-expiry { margin: 9px 0 15px; font-size: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+#pairing-link { display: block; width: 100%; min-height: 72px; margin-top: 9px; padding: 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; resize: vertical; }
+.paired-device { display: flex; align-items: center; gap: 12px; margin-top: 23px; }
+.paired-device > div { min-width: 0; flex: 1; }
+.paired-device strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.paired-device p { margin-top: 4px; font-size: 11px; color: var(--muted-foreground); }
+.usb-list { font-size: 12px; color: var(--muted-foreground); }
+.usb-option { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+.usb-option > span { min-width: 0; }
+.usb-option strong { display: block; color: var(--foreground); font-size: 13px; font-weight: 500; }
+.usb-option small { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 11px; }
+.app-notice { padding: 11px 14px; margin-bottom: 18px; border-radius: 12px; background: var(--card); font-size: 12px; line-height: 1.75; color: var(--muted-foreground); white-space: pre-wrap; overflow-wrap: anywhere; }
+.app-notice[data-error="true"] { color: #a14b39; background: #fff1eb; }
+.demo-notice { margin-bottom: 15px; font-size: 11px; color: #8a6b2c; }
+.app-footer { display: flex; align-items: center; justify-content: space-between; gap: 24px; position: fixed; z-index: 10; left: 36px; right: 36px; bottom: 15px; padding-top: 8px; background: var(--background); color: var(--muted-foreground); font-size: 10px; }
+.app-footer > span { display: flex; align-items: center; gap: 5px; }
+.connection-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--muted-foreground); flex-shrink: 0; }
+.connection-dot[data-connected="true"] { background: #329666; }
+@media (max-width: 1000px) {
+  .app-shell { padding-right: 28px; padding-left: 28px; }
+  .app-main { max-width: 640px; }
+  .app-footer { left: 28px; right: 28px; }
+}

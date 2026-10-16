@@ -1,0 +1,156 @@
+{
+  "repository": "https://github.com/starc007/ui-components",
+  "commit": "c392b2e712c3d4944bfa4b24c54c8699bbf5f4c7",
+  "license": "MIT",
+  "files": [
+    {
+      "path": "LICENSE",
+      "upstreamSha256": "9e27b491d5691a1bd95708e79de23beb2962f33fe6c1ee31ab639f43009a0b20"
+    },
+    {
+      "path": "components/agents/agent-activity/activity-row.tsx",
+      "upstreamSha256": "81eca79e4a921ab1862ff930a4177ba9098bb9f83b7356196cc1094dca2fa511"
+    },
+    {
+      "path": "components/agents/agent-activity/index.tsx",
+      "upstreamSha256": "e8a825f83a4540801730591e5b736c4f7e0db58f3b4721010966580fc46b7265"
+    },
+    {
+      "path": "components/agents/agent-activity/types.ts",
+      "upstreamSha256": "4e0038a255aead2d9d6aaf9dd9544346570d099928e7d361149ee8ab17ae39d3"
+    },
+    {
+      "path": "components/agents/agent-disclosure.tsx",
+      "upstreamSha256": "5113ab48b4ff542edda92ace14d0c4de89e3e3f06fca9e354b133fec93ce4265"
+    },
+    {
+      "path": "components/agents/loading-states/thinking-shimmer.tsx",
+      "upstreamSha256": "2879bd5fd406c014610be6f304bb4b71e1aac0ac6eec531de4cd3eba4827b7bf"
+    },
+    {
+      "path": "components/agents/prompt-input.tsx",
+      "upstreamSha256": "48c73c0901d8a360c6e97d607df4e13b4e2b70fdf72a425a27b6d6c3b405f23b"
+    },
+    {
+      "path": "components/motion/button/base.tsx",
+      "upstreamSha256": "5948d878f3446b4cdfa6e076aa2c6ccdb05f5a102bbba074b022de6f3e924144"
+    },
+    {
+      "path": "components/motion/button/index.tsx",
+      "upstreamSha256": "df1d7b59bcef7549c02c5d231114d62d4ddba9773a9ea05ca6c842210fcf6b46"
+    },
+    {
+      "path": "components/motion/button/magnetic.tsx",
+      "upstreamSha256": "864dc7db0cda2d8ee9bff7127706c546632d00f554595c9ce1816e283acb2a1f"
+    },
+    {
+      "path": "components/motion/button/metallic.tsx",
+      "upstreamSha256": "e95693277c7dfd71f55c096fca8a3aee2cc92fde1826f46ceab07d56d20b9f0e"
+    },
+    {
+      "path": "components/motion/button/stateful.tsx",
+      "upstreamSha256": "8eb0731b06cc6375f7f42bcf3efaa9cdc55f4af08ce28835f2b08bd4b25c32de"
+    },
+    {
+      "path": "components/motion/card.tsx",
+      "upstreamSha256": "bb8bfb95302743d4bcce54aa80b55dbad2788f48d98e97c9d3c2040df777f6e4"
+    },
+    {
+      "path": "components/motion/input.tsx",
+      "upstreamSha256": "4dd774bbada7f1c9ec283905586a4306593792ea570ae81caa71874d5bdb0b3d"
+    },
+    {
+      "path": "components/motion/magnetic.tsx",
+      "upstreamSha256": "f7802af9bbe57998575f6d9846ecfccc842f3c682e8fb0958957581dfd9873a3"
+    },
+    {
+      "path": "components/motion/popover-morph.tsx",
+      "upstreamSha256": "d8c25bebf1f8dcb642f5ff0b8757923e25b3876230e3226eb35e3b28913fd7ae"
+    },
+    {
+      "path": "components/motion/popover-position.ts",
+      "upstreamSha256": "a31a9dc602243c3966aa1043cfd41dec5c13df1a52c847e745c88cbf00cb1f2e"
+    },
+    {
+      "path": "components/motion/select.tsx",
+      "upstreamSha256": "abe62c20b07466246d05fb4596ad45c2acc42c10fdd68caffcd3d73b21820cab"
+    },
+    {
+      "path": "components/motion/tabs.tsx",
+      "upstreamSha256": "5119e3c758f1cadd539b9804de456bd4063aa59e8d8401c25f04e5510ceebe08"
+    },
+    {
+      "path": "components/motion/text-shimmer.tsx",
+      "upstreamSha256": "a8ae8ca2966009a4c9d14085985cb2e571af1b5c75e8e64cb1f4dd99f3fb3236"
+    },
+    {
+      "path": "components/motion/tooltip-surface.tsx",
+      "upstreamSha256": "d082ccbc58b0ad10a4372245a6254f9a70095a55d869595d6bba778b23aba3f8"
+    },
+    {
+      "path": "components/motion/tooltip.tsx",
+      "upstreamSha256": "05aa29e1cac3ac96d2ea5f1320e48cc65f905b26ccee8044971d6a0318c776b4"
+    },
+    {
+      "path": "components/motion/tooltip/grace.ts",
+      "upstreamSha256": "a79f94a822560008bd903da1a939a6b76f8a2678daaf4733079afdb47d58f568"
+    },
+    {
+      "path": "components/motion/tooltip/positioner.tsx",
+      "upstreamSha256": "822fdab7bbe3767b3a78485be8351fb59518f53085a9294b2504a2d49e77e3fb"
+    },
+    {
+      "path": "components/motion/tooltip/use-position.ts",
+      "upstreamSha256": "219252b6c13d8a9d320fee90155285a051716594aae89020679bc22069bb4ee9"
+    },
+    {
+      "path": "lib/ease.ts",
+      "upstreamSha256": "bdfa2814cffaa4d974a5fc8614868ddb89e0310a0ead9e7105f2e8132b219ff3"
+    },
+    {
+      "path": "lib/hooks/use-dismiss.ts",
+      "upstreamSha256": "b3243c39f363c9f9b33b528a2e720d5d48370e964b8c6c80747da423a4269a2a"
+    },
+    {
+      "path": "lib/hooks/use-hover-capable.ts",
+      "upstreamSha256": "b5b9397bfa03859e04673c8f1817cf13ff55d2a9688955d6e0459ae70db90d06"
+    },
+    {
+      "path": "lib/hooks/use-hover-gesture.ts",
+      "upstreamSha256": "d381531c81668faf22cada58671451f4e7b53cf8d8718d6768e485139810755d"
+    },
+    {
+      "path": "lib/hooks/use-tap-gesture.ts",
+      "upstreamSha256": "b91954bf9f1cdc1771b2a6eac815d2f4e2493cb2cde5f508b2d96509dd71aeee"
+    },
+    {
+      "path": "lib/text-shimmer.ts",
+      "upstreamSha256": "b997e94846a75326464408132a569c9f33f26ba7373fe5f8f9c2214fec8e9fbd"
+    },
+    {
+      "path": "lib/theme-css.ts",
+      "upstreamSha256": "a12e5a4a1ef47d195fd642308bcdbe00afafa7a4d725eb412559d1937d398919"
+    },
+    {
+      "path": "lib/touch.ts",
+      "upstreamSha256": "f2a15c243c86c8bd1abb6e2e65a423b3a4c45cc1d797ebd83997f21cd1beadb9"
+    },
+    {
+      "path": "lib/utils.ts",
+      "upstreamSha256": "7c8c3dfc0cdd370d44932828eb067ef771c8fe7996693221d5d4b90af6d54f2d"
+    }
+  ],
+  "derivedFiles": [
+    {
+      "path": "theme.css",
+      "source": "lib/theme-css.ts",
+      "operation": "Exact extraction of THEME_CSS template literal contents"
+    }
+  ],
+  "localModifications": [
+    {
+      "path": "components/agents/prompt-input.tsx",
+      "description": "Optional submit/stop aria-label, id and data-testid props for Chinese accessibility labels and existing integration selectors; no visual or motion changes."
+    }
+  ]
+}

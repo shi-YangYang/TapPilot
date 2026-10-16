@@ -1,5 +1,18 @@
 # 验证记录
 
+## 原版 beUI 组件接入 v0.3.3（2026-10-16）
+
+范围：桌面渲染层迁移到 React、引入 Tailwind/Motion 构建和原组件、重接 UI 事件，属于 S3 的相关客户端验证；Android 为 S2 的原生布局与动画适配。上游固定到 `c392b2e712c3d4944bfa4b24c54c8699bbf5f4c7`，组件来源与有限修改见 `desktop/src/beui/UPSTREAM.json`。
+
+- 桌面 TypeScript 检查、React/主进程 bundle 和 Tailwind 构建通过。新增组件依赖均锁定版本，官方主题、Geist 字体与许可证打包到本地。
+- 普通 Electron smoke 通过：实际 React 受控表单保存/测试、密钥加密及保存后清空、PromptInput 输入和提交、Tabs/Select 键盘交互、三页与 960×700 布局、合成演示及 UI 取消。初次检查因后台测试窗口没有系统焦点而失败；测试助手改为仅对自己 webContents 使用 Chromium 焦点模拟和输入事件后通过，未操作或解锁 macOS 桌面。
+- 无线 Electron smoke 通过：通过新版 UI 连接生产配对控制器与合成 WSS 手机，保存本地模拟模型配置，PromptInput 的 Enter 触发任务，经动作及新观察返回结果；UI 取消、断线后不重放、UI 急停及断开正常。配对后二维码/链接清除，配对秘密未进入模型请求、持久化配置或截图。
+- 视觉检查确认使用原组件的输入器、表单、标签与菜单。主导航外层宽度修正后重新构建，仅重拍相关页面，没有重复已通过的功能检查。
+- Android Debug 和 AndroidTest APK 构建成功；独立 API 34 arm64 模拟器的原三页布局测试返回 `OK (1 test)`，关键控件可见且无横向溢出。模拟器未启用自动化权限，检查后清理临时目录。原生按钮/标签动画保留系统关闭动画时的直接状态更新。
+- 最终 macOS arm64 安装包生成成功，Plist 与 asar 版本均为 `0.3.3`，包内包含 beUI、Geist 许可证与字体资源；APK 元数据为 `versionName 0.3.3`、`versionCode 6`。最终三页与窄窗口截图保存于 `desktop/release/ui-preview-v0.3.3/`。
+
+本轮没有调用用户模型或控制真实手机，没有移除 `FLAG_SECURE`。Android 的原生适配不等于在手机运行 React 组件；真实设备外观和任务联调仍留待后续。未重复运行无关服务端测试。
+
 ## beUI 风格改版 v0.3.2（2026-10-16）
 
 范围：双端三页布局、控件样式及少量界面状态展示，属于 S2。参考 beUI 免费设计规范，用原有 HTML/CSS 与 Kotlin View 实现；没有引入 React 或付费组件。验证限定于客户端界面和交付构建，未重复执行服务端及无线协议测试。
