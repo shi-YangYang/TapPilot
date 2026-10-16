@@ -125,7 +125,7 @@ test("final verification detects a session, app or window change while the model
     let reads = 0;
     const { result, calls } = await scenario([], async () => observed(++reads, reads === 1 ? {} : overrides));
     assert.equal(result.status, "failed");
-    assert.match(result.error!, /COMPLETION_CONTEXT_CHANGED/);
+    assert.match(result.error!, "snapshotId" in overrides ? /TARGET_CHANGED/ : /COMPLETION_CONTEXT_CHANGED/);
     assert.equal(result.answer, answer);
     assert.deepEqual(calls, ["get_ui_tree", "get_ui_tree"]);
     assert.equal(result.metrics.modelRequests, 1);

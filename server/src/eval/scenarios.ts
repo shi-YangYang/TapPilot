@@ -9,7 +9,8 @@ export interface Scenario {
   parameters: { x: number; y: number; scrolls: number; loadingTicks: number; cancel: boolean; reverseOrder: boolean };
 }
 export function generateScenarios(options: { split?: Split; mechanisms?: readonly Mechanism[] } = {}): Scenario[] {
-  return (options.mechanisms ?? MECHANISMS).flatMap((mechanism, index) => Array.from({ length: 10 }, (_, offset) => {
+  return (options.mechanisms ?? MECHANISMS).flatMap(mechanism => Array.from({ length: 10 }, (_, offset) => {
+    const index = MECHANISMS.indexOf(mechanism);
     const seed = offset + 1;
     // Entire safety mechanisms, plus unseen seeds of every other mechanism, are reserved.
     const split: Split = index >= 10 || seed >= 8 ? "holdout" : "train";

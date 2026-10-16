@@ -166,6 +166,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
     }] : nativeExit ? [nativeExit] : [];
     const conversation = new Conversation(SYSTEM, options.task);
     let latestObservation: Record<string, unknown> | undefined;
+    let pinnedSession: string | undefined;
     let unresolvedActionFailure = false;
     let acceptedAwaitingObservation = false;
     let argumentRepairUsed = false;
@@ -258,6 +259,15 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
         ...(update.observationChanged === undefined ? {} : { changes: { observationChanged: update.observationChanged } }) });
       emit({ type: "tool_end", turn, toolName: name, ...actionEvent, durationMs: Math.round(performance.now() - toolStarted), ok: result.ok !== false && !errorCode,
         ...(errorCode ? { errorCode } : {}), ...(errorReason ? { errorReason } : {}), ...(update.observationChanged !== undefined ? { observationChanged: update.observationChanged } : {}) });
+      const incomingObservation = fullObservation(result);
+      const incomingScope = observationScope(incomingObservation);
+      if ((pinnedSession && incomingScope && pinnedSession !== incomingScope.session) ||
+          (toolError === "TARGET_CHANGED" && errorReason === "SESSION_CHANGED")) {
+        throw new RuntimeError("TARGET_CHANGED", "手机控制会话已变化，旧任务已停止。请检查手机后重新开始；没有继续操作新会话。");
+      }
+      // Missing/stale observations invalidate node handles, never the identity
+      // of the phone session this task started controlling.
+      if (!pinnedSession && result.ok === true && incomingObservation?.truncated === false) pinnedSession = incomingScope?.session;
       if (toolError === "PROTECTED_APP" && (!initialProtection || protectedExitTools.length === 0)) throw new RuntimeError("PROTECTED_APP", PROTECTED_MESSAGE);
       if (toolError && TERMINAL_TOOL_ERRORS.has(toolError)) {
         const message = toolError === "MANUAL_ACTION_REQUIRED" ? "本版发送消息、付款、下单和删除等操作需要你在手机上手工完成，已停止自动执行。" :
