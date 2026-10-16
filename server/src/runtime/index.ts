@@ -4,6 +4,7 @@ import { Conversation, fullObservation, signature } from "./context.js";
 import { completion, endpointFor, RuntimeError } from "./model.js";
 import type { AgentTool, ModelConfig, ModelFetch, ToolCall } from "./model.js";
 import { actionRejectionReason, UI_PROJECTION_LEGEND } from "./ui-projection.js";
+import { createDiagnosticRunId, DiagnosticEventSchema, safeDiagnosticActionKind, safeDiagnosticErrorCode, safeDiagnosticReason, type DiagnosticEvent } from "../diagnostics/schema.js";
 export { testModel, endpointFor, RuntimeError } from "./model.js";
 export type { ModelConfig, ModelFetch, AgentTool } from "./model.js";
 
@@ -13,6 +14,7 @@ export type AgentOptions = {
   task: string; model: ModelConfig; tools: AgentTool[];
   execute: (name: string, args: Record<string, unknown>, signal: AbortSignal) => Promise<Record<string, unknown>>;
   signal?: AbortSignal; onEvent?: (event: Record<string, unknown>) => void; maxTurns?: number; modelFetch?: ModelFetch;
+  onDiagnostic?: (event: DiagnosticEvent) => void | Promise<void>; diagnosticVersion?: string;
 };
 
 const SYSTEM = `You are TapPilot, the user's phone assistant. Complete only the user's task using the provided tools.
@@ -116,6 +118,18 @@ async function executeWithDeadline(options: AgentOptions, name: string, args: Re
 
 export async function runAgent(options: AgentOptions): Promise<AgentResult> {
   const started = performance.now();
+  const diagnosticRunId = createDiagnosticRunId();
+  let diagnosticStep = 0;
+  const diagnose = (fields: Omit<DiagnosticEvent, "schemaVersion" | "runId" | "timestamp" | "stepIndex" | "versions">) => {
+    if (!options.onDiagnostic) return;
+    try {
+      // This separate producer never receives task/arguments/UI/model text. The
+      // strict parser clones metadata before an observer can mutate it.
+      const parsed = DiagnosticEventSchema.safeParse({ schemaVersion: 1, runId: diagnosticRunId,
+        timestamp: Date.now(), stepIndex: diagnosticStep++, versions: { host: options.diagnosticVersion ?? "unknown" }, ...fields });
+      if (parsed.success) void Promise.resolve(options.onDiagnostic(parsed.data)).catch(() => {});
+    } catch { /* Optional diagnostic readers cannot change execution. */ }
+  };
   const metrics: AgentMetrics = { totalMs: 0, modelMs: 0, toolMs: 0, modelRequests: 0, toolCalls: 0, hostReads: 0, completionReads: 0, preflightReads: 0, modelRequestBytes: 0, modelUiBytes: 0, rawUiBytes: 0 };
   const deadline = new AbortController();
   const timeout = setTimeout(() => deadline.abort(new RuntimeError("TASK_TIMEOUT", "任务达到 10 分钟上限，已停止。")), 10 * 60_000);
@@ -124,6 +138,14 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
   const finish = (status: AgentResult["status"], answer: string, error?: string): AgentResult => {
     metrics.totalMs = Math.round(performance.now() - started);
     const result = { status, answer, metrics: { ...metrics }, ...(error ? { error } : {}) };
+    diagnose({ eventType: "run_finished", actionKind: "none", runStatus: status,
+      // Completion only means the runtime ended with an answer; it has no
+      // independent oracle proving the user's task semantically succeeded.
+      outcome: status === "completed" ? "unknown" : status === "failed" ? "failure" : "cancelled",
+      failureStage: status === "failed" ? "runtime" : "none", dispatchState: "not_applicable",
+      acceptanceState: "not_applicable", effectState: "unknown",
+      errorCode: status === "completed" ? "NONE" : status === "cancelled" ? "CANCELLED" : safeDiagnosticErrorCode(error?.split(":", 1)[0]),
+      reason: status === "failed" ? "UNKNOWN" : "NONE", timings: { totalMs: metrics.totalMs, modelMs: metrics.modelMs, toolMs: metrics.toolMs } });
     emit({ type: status === "failed" ? "error" : status, ...result });
     return result;
   };
@@ -174,8 +196,19 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
       const toolStarted = performance.now();
       metrics.toolCalls++;
       if (hostRead) metrics.hostReads = (metrics.hostReads ?? 0) + 1;
-      const result = await executeWithDeadline(options, name, args, signal).finally(() => { metrics.toolMs += Math.round(performance.now() - toolStarted); });
-      signal.throwIfAborted();
+      let result: Record<string, unknown>;
+      try {
+        result = await executeWithDeadline(options, name, args, signal);
+        signal.throwIfAborted();
+      } catch (error) {
+        diagnose({ eventType: "tool_result", actionKind: safeDiagnosticActionKind(action ?? name),
+          outcome: signal.aborted ? "cancelled" : "failure", failureStage: "unknown",
+          // Entering execute is not evidence that an action reached the phone.
+          dispatchState: action ? "unknown" : "not_applicable", acceptanceState: action ? "unknown" : "not_applicable",
+          effectState: action ? "unknown" : "not_applicable", errorCode: signal.aborted ? "CANCELLED" : safeDiagnosticErrorCode(error instanceof RuntimeError ? error.code : undefined),
+          reason: "UNKNOWN", timings: { toolMs: Math.round(performance.now() - toolStarted) } });
+        throw error;
+      } finally { metrics.toolMs += Math.round(performance.now() - toolStarted); }
       if (isRecord(result.meta) && result.meta.preflightRead === true) metrics.preflightReads = (metrics.preflightReads ?? 0) + 1;
       const observationError = isRecord(result.result) && isRecord(result.result.observationError) ? result.result.observationError : undefined;
       const reportedErrors = [isRecord(result.error) ? result.error.code : undefined, observationError?.code].filter((code): code is string => typeof code === "string");
@@ -209,6 +242,20 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
       } : undefined;
       const update = conversation.result(call.id, result, name === "act_and_observe" && !localObservation || name === "get_current_app" && !matchingAppMetadata, action, recoveryGuidance);
       const errorReason = isRecord(result.error) && isRecord(result.error.details) ? actionRejectionReason(result.error.details.reason) : undefined;
+      const diagnosticAccepted = result.ok === true && isRecord(result.result) && isRecord(result.result.action) && result.result.action.accepted === true;
+      // localRejection is reserved and stripped from phone responses by the
+      // client. preflightRead alone is not an authenticated dispatch marker;
+      // keep that result unknown until the executor exposes stronger evidence.
+      const hostRefusal = localRefusal;
+      diagnose({ eventType: "tool_result", actionKind: safeDiagnosticActionKind(action ?? name),
+        outcome: errorCode ? "failure" : result.ok === true ? "success" : "unknown",
+        failureStage: errorCode ? hostRefusal ? "host_validation" : observationError ? "observation" : "unknown" : "none",
+        dispatchState: !action ? "not_applicable" : hostRefusal ? "not_sent" : diagnosticAccepted ? "sent" : "unknown",
+        acceptanceState: !action ? "not_applicable" : hostRefusal ? "rejected" : diagnosticAccepted ? "accepted" : "unknown",
+        effectState: !action ? "not_applicable" : diagnosticAccepted && !errorCode && update.observationChanged !== undefined ? update.observationChanged ? "changed" : "unchanged" : "unknown",
+        errorCode: errorCode ? safeDiagnosticErrorCode(errorCode) : "NONE", reason: errorCode ? safeDiagnosticReason(errorReason) : "NONE",
+        timings: { toolMs: Math.round(performance.now() - toolStarted) },
+        ...(update.observationChanged === undefined ? {} : { changes: { observationChanged: update.observationChanged } }) });
       emit({ type: "tool_end", turn, toolName: name, ...actionEvent, durationMs: Math.round(performance.now() - toolStarted), ok: result.ok !== false && !errorCode,
         ...(errorCode ? { errorCode } : {}), ...(errorReason ? { errorReason } : {}), ...(update.observationChanged !== undefined ? { observationChanged: update.observationChanged } : {}) });
       if (toolError === "PROTECTED_APP" && (!initialProtection || protectedExitTools.length === 0)) throw new RuntimeError("PROTECTED_APP", PROTECTED_MESSAGE);
@@ -309,9 +356,20 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
       }).valid;
       if (protectedScreen && protectedExitUsed) throw new RuntimeError("PROTECTED_APP", PROTECTED_MESSAGE);
       const decisionTools = protectedScreen ? protectedExitTools : canRefresh ? options.tools.filter(tool => tool.name !== "get_ui_tree" && tool.name !== "find_element") : options.tools;
-      const response = await completion(options.model, conversation.messages(), decisionTools, signal, options.modelFetch).finally(() => { metrics.modelMs += Math.round(performance.now() - modelStarted); });
-      signal.throwIfAborted();
+      let response: Awaited<ReturnType<typeof completion>>;
+      try {
+        response = await completion(options.model, conversation.messages(), decisionTools, signal, options.modelFetch);
+        signal.throwIfAborted();
+      } catch (error) {
+        diagnose({ eventType: "model_result", actionKind: "none", outcome: signal.aborted ? "cancelled" : "failure", failureStage: "model",
+          dispatchState: "not_applicable", acceptanceState: "not_applicable", effectState: "not_applicable",
+          errorCode: signal.aborted ? "CANCELLED" : safeDiagnosticErrorCode(error instanceof RuntimeError ? error.code : undefined), reason: "UNKNOWN",
+          timings: { modelMs: Math.round(performance.now() - modelStarted) } });
+        throw error;
+      } finally { metrics.modelMs += Math.round(performance.now() - modelStarted); }
       const durationMs = Math.round(performance.now() - modelStarted);
+      diagnose({ eventType: "model_result", actionKind: "none", outcome: "success", failureStage: "none",
+        dispatchState: "not_applicable", acceptanceState: "not_applicable", effectState: "not_applicable", errorCode: "NONE", reason: "NONE", timings: { modelMs: durationMs } });
       metrics.modelRequestBytes = (metrics.modelRequestBytes ?? 0) + response.requestBytes;
       metrics.modelUiBytes = (metrics.modelUiBytes ?? 0) + response.modelUiBytes;
       metrics.rawUiBytes = (metrics.rawUiBytes ?? 0) + response.rawUiBytes;

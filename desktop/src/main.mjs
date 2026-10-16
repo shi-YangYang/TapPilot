@@ -4,6 +4,7 @@ import os from 'node:os';
 import { access } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { runAgent, testModel, RuntimeError } from '../../server/dist/runtime/index.js';
+import { DiagnosticStore } from '../../server/dist/diagnostics/index.js';
 import { createUsbClient, createWirelessClient, listUsbDevices } from '../../server/dist/client-tools.js';
 import { WirelessHub, listLANAddresses } from '../../server/dist/wireless.js';
 import QRCode from 'qrcode';
@@ -15,6 +16,7 @@ import { createModelFetch } from './model-network.mjs';
 app.setName('TapPilot');
 let window;
 let store;
+let diagnostics;
 let active;
 let stopping = false;
 let modelTest;
@@ -95,7 +97,8 @@ async function begin(value, demo) {
       else {
         run.client = input.mode === 'wireless' ? createWirelessClient(wireless.forDevice(input.deviceId)) : await createUsbClient({ adbPath: await adbPath(), serial: input.serial });
         if (controller.signal.aborted) throw new ClientError('CANCELLED', '操作已取消。');
-        result = await runAgent({ task: input.task, model, modelFetch, tools: run.client.tools, execute: (name, args, signal) => run.client.execute(name, args, signal), signal: controller.signal, onEvent, maxTurns: 24 });
+        result = await runAgent({ task: input.task, model, modelFetch, tools: run.client.tools, execute: (name, args, signal) => run.client.execute(name, args, signal), signal: controller.signal, onEvent, maxTurns: 24,
+          diagnosticVersion: app.getVersion(), onDiagnostic: event => { void diagnostics.append(event); } });
       }
       send({ type: 'run_finished', demo, status: result.status, answer: result.answer || '', metrics: result.metrics, ...(result.error ? { error: runtimeError(result.error) } : {}) });
     } catch (error) {
@@ -131,6 +134,9 @@ async function emergency(value) {
 }
 
 app.whenReady().then(async () => {
+  // Separate privacy-whitelisted metadata sink. UI events contain answers and
+  // must never be sent to persistent diagnostics.
+  diagnostics = new DiagnosticStore({ rootDirectory: app.getPath('userData') });
   modelFetch = createModelFetch();
   wireless = new WirelessSession({ startHub: options => WirelessHub.start(options), addresses: listLANAddresses,
     qr: value => QRCode.toDataURL(value, { errorCorrectionLevel: 'M', margin: 3, width: 300, color: { dark: '#171717', light: '#ffffff' } }),
