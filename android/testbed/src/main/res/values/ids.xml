@@ -1,0 +1,17 @@
+<resources>
+    <item name="navigation_open" type="id" />
+    <item name="navigation_target" type="id" />
+    <item name="search_input" type="id" />
+    <item name="search_go" type="id" />
+    <item name="search_result" type="id" />
+    <item name="async_target" type="id" />
+    <item name="async_refresh" type="id" />
+    <item name="ime_input" type="id" />
+    <item name="ime_save" type="id" />
+    <item name="ime_switch" type="id" />
+    <item name="ime_focus" type="id" />
+    <item name="overlay_target" type="id" />
+    <item name="long_target" type="id" />
+    <item name="web_content" type="id" />
+    <item name="canvas_content" type="id" />
+</resources>

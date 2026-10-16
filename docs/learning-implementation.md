@@ -6,8 +6,8 @@
 
 | 阶段 | 交付 | 状态 |
 | --- | --- | --- |
-| 1 | 有界脱敏诊断、运行链接入、错误分类与清除命令 | 已接入，验证通过后提交 |
-| 2 | 120 个确定性场景、独立判定器、真实模型评测入口、Android 合成测试 App | 实施中 |
+| 1 | 有界脱敏诊断、运行链接入、错误分类与清除命令 | 已完成，44f003d |
+| 2 | 120 个确定性场景、独立判定器、真实模型评测入口、Android 合成测试 App | 已实现，验证记录见下文 |
 | 3 | 失败总结候选、经验验证与检索、按任务固定策略、停用与回滚 | 待实施 |
 | 4 | 隔离代码修复候选、复现及保留集门禁、人工评审产物 | 待实施 |
 
@@ -44,3 +44,33 @@ npm run diagnostics -- clear
 ```
 
 默认数据目录为 macOS 的 `~/Library/Application Support/TapPilot`。开发环境或其它系统用 `--root /path/to/userData` 指定已有目录。清除命令仅删除本模块的事件文件，不删除模型配置。模型HTTP状态等不在固定枚举内时归为 `UNKNOWN`，不保存服务返回的原文。
+
+## 可复现评测
+
+```bash
+cd server
+npm run eval -- --split all --mode fixture --output /tmp/tappilot-eval.json
+# 单场景重复；模型需 TAPPILOT_EVAL_BASE_URL / MODEL / API_KEY 配置
+npm run eval -- --split train --mode model --scenario fresh_ids-1 --runs 3 --output /tmp/tappilot-model.json
+```
+
+默认不请求外部模型。真实模型只支持现有 OpenAI Chat Completions 兼容协议；未知协议明确拒绝。可用 `--max-tasks` 和 `--timeout-ms` 限制离线评测开销。初始 120 场景为 12 类机制 × 10 seed，70 开发用例、50 保留用例；候选生成不应读取保留集，禁止按其结果反复调优后仍声称独立泛化。
+
+已保存桌面模型可使用 Electron 在进程内读取钥匙串，不需要导出密钥：
+
+```bash
+cd desktop
+./node_modules/.bin/electron scripts/evaluate-saved-model.mjs --use-saved-model --output /tmp/tappilot-saved-model.json
+```
+
+该命令明确执行 6 类场景 × 3 次，最长 20 分钟；只发送合成数据。报告不含模型配置或原始模型响应。
+
+首次真实模型基线（18 次）为 15 目标达成、2 安全拒绝、1 会话切换后错误继续并假完成，43 次模型请求，累计约 194 秒。该失败说明会话切换不能依赖模型自主停止，需增加宿主强制边界；后续修复另记，不覆盖这份基线。
+
+Android 合成 App 的构建、安装、独立 oracle 与场景说明见 [testbed README](../android/testbed/README.md)。生产链示例：
+
+```bash
+node scripts/testbed-eval.mjs --serial emulator-5580 --mode fixture --output /tmp/tappilot-android.json
+```
+
+本次 API 34 模拟器验证：10 个场景合同测试通过，新增 runId 和输入相关调整后 4 个受影响测试通过；正常授权 UI bootstrap 通过。生产完整链验证 7 个可访问场景成功、0 误点；自绘 canvas 没有视觉工具，明确停止。首次 WebView 因窗口尚未前台而失败，测试 harness 增加前台确认和按实际 UI 等待表单后，单场景复测通过。未重跑其余已通过场景。该结果不代表全部品牌手机或第三方 App 的兼容性。

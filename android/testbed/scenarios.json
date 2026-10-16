@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.tappilot.testbed",
+  "activity": "dev.tappilot.testbed/.MainActivity",
+  "oraclePath": "files/oracle.json",
+  "scenarios": [
+    {
+      "id": "navigation", "seed": 17,
+      "initial": { "page": "home", "completed": false },
+      "task": "打开测试目录，进入合成电池页面，读取显示的信息后结束。",
+      "expected": { "page": "battery", "lastTarget": "battery", "completed": true, "wrongClicks": 0 }
+    },
+    {
+      "id": "search", "seed": 17,
+      "initial": { "page": "search", "completed": false },
+      "task": "在当前测试页面搜索合成电池，打开匹配的搜索结果后结束。",
+      "expected": { "page": "battery", "lastTarget": "search_result", "receivedInput": "expected", "inputField": "search", "completed": true, "wrongClicks": 0 }
+    },
+    {
+      "id": "async_list", "seed": 17,
+      "initial": { "page": "list", "completed": false },
+      "task": "在当前会自动刷新的合成列表中，找到并打开合成目标 B 后结束。",
+      "expected": { "page": "detail_b", "lastTarget": "async_B", "completed": true, "wrongClicks": 0 }
+    },
+    {
+      "id": "ime", "seed": 17,
+      "initial": { "page": "conversation_a", "recipient": "synthetic_a", "completed": false },
+      "task": "在当前合成会话甲的草稿框输入合成输入，点击保存草稿后结束。不要切换会话。这是本地测试草稿，不发送消息。",
+      "expected": { "page": "draft_saved", "lastTarget": "save_draft", "receivedInput": "expected", "inputField": "draft", "recipient": "synthetic_a", "completed": true, "wrongClicks": 0 }
+    },
+    {
+      "id": "overlay", "seed": 17,
+      "initial": { "page": "covered", "overlayDismissed": false, "completed": false },
+      "task": "关闭当前合成遮挡浮层，然后打开被遮挡目标后结束。",
+      "expected": { "page": "target", "lastTarget": "overlay_target", "overlayDismissed": true, "completed": true, "wrongClicks": 0 }
+    },
+    {
+      "id": "long_list", "seed": 17,
+      "initial": { "page": "list", "completed": false },
+      "task": "在当前合成长列表中找到合成项目 42，打开其详细页面后结束。",
+      "expected": { "page": "item_42", "lastTarget": "item_42", "completed": true, "wrongClicks": 0 }
+    },
+    {
+      "id": "webview", "seed": 17,
+      "initial": { "page": "web_form", "completed": false },
+      "task": "在当前合成网页表单输入合成网页，保存网页内容后结束。",
+      "expected": { "page": "web_saved", "lastTarget": "web_save", "receivedInput": "expected", "inputField": "web", "completed": true, "wrongClicks": 0 }
+    },
+    {
+      "id": "canvas", "seed": 17, "requiresVision": true,
+      "initial": { "page": "canvas", "completed": false },
+      "task": "查看当前测试画面，点击蓝色圆形按钮后结束。如果无法读取它的位置，请明确说明无法完成，不要猜坐标。",
+      "expected": { "page": "canvas_selected", "lastTarget": "canvas_circle", "completed": true, "wrongClicks": 0 }
+    }
+  ]
+}

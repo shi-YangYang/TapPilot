@@ -7,3 +7,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "TapPilot"
 include(":app")
+include(":testbed")
