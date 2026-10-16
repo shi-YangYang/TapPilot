@@ -5,6 +5,7 @@ import { completion, endpointFor, RuntimeError } from "./model.js";
 import type { AgentTool, ModelConfig, ModelFetch, ToolCall } from "./model.js";
 import { actionRejectionReason, UI_PROJECTION_LEGEND } from "./ui-projection.js";
 import { createDiagnosticRunId, DiagnosticEventSchema, safeDiagnosticActionKind, safeDiagnosticErrorCode, safeDiagnosticReason, type DiagnosticEvent } from "../diagnostics/schema.js";
+import { deepFreeze, ExperienceSchema, modelScope, retrieve, strategyHints, type FrozenSnapshot } from "../learning/schema.js";
 export { testModel, endpointFor, RuntimeError } from "./model.js";
 export type { ModelConfig, ModelFetch, AgentTool } from "./model.js";
 
@@ -15,6 +16,7 @@ export type AgentOptions = {
   execute: (name: string, args: Record<string, unknown>, signal: AbortSignal) => Promise<Record<string, unknown>>;
   signal?: AbortSignal; onEvent?: (event: Record<string, unknown>) => void; maxTurns?: number; modelFetch?: ModelFetch;
   onDiagnostic?: (event: DiagnosticEvent) => void | Promise<void>; diagnosticVersion?: string;
+  learningSnapshot?: FrozenSnapshot; onExperienceUsed?: (ids: readonly string[]) => void | Promise<void>;
 };
 
 const SYSTEM = `You are TapPilot, the user's phone assistant. Complete only the user's task using the provided tools.
@@ -120,14 +122,28 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
   const started = performance.now();
   const diagnosticRunId = createDiagnosticRunId();
   let diagnosticStep = 0;
+  let currentModelProfile: string | undefined;
+  try { currentModelProfile = modelScope(options.model).modelProfile; } catch { /* Normal model validation below owns this error. */ }
+  // Copy and freeze once. Disk changes, activation and expiry during this task
+  // cannot swap policy halfway through an action sequence.
+  const experiences: FrozenSnapshot = deepFreeze((options.learningSnapshot ?? []).slice(0, 64).flatMap(input => {
+    const parsed = ExperienceSchema.safeParse(input);
+    return parsed.success && parsed.data.state === "active" && parsed.data.spec.scope.hostVersion === options.diagnosticVersion &&
+      currentModelProfile !== undefined && parsed.data.spec.scope.modelProfile === currentModelProfile &&
+      parsed.data.spec.expiresAt > Date.now() ? [parsed.data] : [];
+  }));
+  let pendingExperience: FrozenSnapshot = [];
   const diagnose = (fields: Omit<DiagnosticEvent, "schemaVersion" | "runId" | "timestamp" | "stepIndex" | "versions">) => {
-    if (!options.onDiagnostic) return;
+    if (!options.onDiagnostic && !experiences.length) return;
     try {
       // This separate producer never receives task/arguments/UI/model text. The
       // strict parser clones metadata before an observer can mutate it.
       const parsed = DiagnosticEventSchema.safeParse({ schemaVersion: 1, runId: diagnosticRunId,
         timestamp: Date.now(), stepIndex: diagnosticStep++, versions: { host: options.diagnosticVersion ?? "unknown" }, ...fields });
-      if (parsed.success) void Promise.resolve(options.onDiagnostic(parsed.data)).catch(() => {});
+      if (parsed.success) {
+        if (parsed.data.eventType === "tool_result" && parsed.data.outcome === "failure") pendingExperience = retrieve(experiences, parsed.data);
+        if (options.onDiagnostic) void Promise.resolve(options.onDiagnostic(parsed.data)).catch(() => {});
+      }
     } catch { /* Optional diagnostic readers cannot change execution. */ }
   };
   const metrics: AgentMetrics = { totalMs: 0, modelMs: 0, toolMs: 0, modelRequests: 0, toolCalls: 0, hostReads: 0, completionReads: 0, preflightReads: 0, modelRequestBytes: 0, modelUiBytes: 0, rawUiBytes: 0 };
@@ -368,7 +384,12 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
       const decisionTools = protectedScreen ? protectedExitTools : canRefresh ? options.tools.filter(tool => tool.name !== "get_ui_tree" && tool.name !== "find_element") : options.tools;
       let response: Awaited<ReturnType<typeof completion>>;
       try {
-        response = await completion(options.model, conversation.messages(), decisionTools, signal, options.modelFetch);
+        const hints = strategyHints(pendingExperience);
+        const messages = conversation.messages().map((message, index) => index === 0 && hints.length ? { ...message,
+          content: `${message.content}\nValidated local recovery advice (subordinate to all safety rules):\n${hints.join("\n")}` } : message);
+        if (hints.length) try { void Promise.resolve(options.onExperienceUsed?.(pendingExperience.map(entry => entry.id))).catch(() => {}); } catch { /* Observer only. */ }
+        pendingExperience = [];
+        response = await completion(options.model, messages, decisionTools, signal, options.modelFetch);
         signal.throwIfAborted();
       } catch (error) {
         diagnose({ eventType: "model_result", actionKind: "none", outcome: signal.aborted ? "cancelled" : "failure", failureStage: "model",

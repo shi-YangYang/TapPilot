@@ -1,5 +1,6 @@
 import { Adb } from "../adb.js";
 import type { DiagnosticEvent } from "../diagnostics/schema.js";
+import type { FrozenSnapshot } from "../learning/schema.js";
 import { createPhoneClient } from "../client-tools.js";
 import { runAgent, type ModelConfig, type ModelFetch } from "../runtime/index.js";
 import { resultFor, summarize, type EvaluationResult } from "./report.js";
@@ -7,7 +8,7 @@ import { ScenarioPhone, type Json } from "./synthetic-phone.js";
 import { SUITE_VERSION, type Scenario } from "./scenarios.js";
 export interface Decision { name: string; arguments: Json }
 export type FixturePolicy = (observation: Json | undefined, body: Json, scenario: Scenario) => Decision | undefined;
-export interface EvaluationOptions { model?: ModelConfig; modelFetch?: ModelFetch; fixturePolicy?: FixturePolicy; signal?: AbortSignal; onDiagnostic?: (event: DiagnosticEvent) => void; modelFetchDecorator?: (base: ModelFetch) => ModelFetch }
+export interface EvaluationOptions { model?: ModelConfig; modelFetch?: ModelFetch; fixturePolicy?: FixturePolicy; signal?: AbortSignal; learningSnapshot?: FrozenSnapshot; onDiagnostic?: (event: DiagnosticEvent) => void; modelFetchDecorator?: (base: ModelFetch) => ModelFetch }
 export function currentObservation(body: Json): Json | undefined {
   let latest: Json | undefined;
   const visit = (value: unknown) => {
@@ -62,7 +63,7 @@ export async function runScenario(scenario: Scenario, options: EvaluationOptions
     const result = await runAgent({ task: scenario.task, tools: client.tools,
       model: options.model ?? { baseUrl: "https://eval.invalid/v1", apiKey: "fixture", model: "observed-policy" }, modelFetch: fetch,
       signal: AbortSignal.any([cancelled.signal, ...(options.signal ? [options.signal] : [])]), maxTurns: 16,
-      onDiagnostic: options.onDiagnostic,
+      learningSnapshot: options.learningSnapshot, onDiagnostic: options.onDiagnostic,
       execute: (name, args, signal) => client.execute(name, args, signal),
       onEvent: event => { if (typeof event.errorCode === "string") errors.push(event.errorCode); } });
     return resultFor(scenario, phone.state, result, errors);

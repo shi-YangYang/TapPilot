@@ -5,6 +5,7 @@ import { access } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { runAgent, testModel, RuntimeError } from '../../server/dist/runtime/index.js';
 import { DiagnosticStore } from '../../server/dist/diagnostics/index.js';
+import { LearningStore, summarizeCandidates, modelScope } from '../../server/dist/learning/index.js';
 import { createUsbClient, createWirelessClient, listUsbDevices } from '../../server/dist/client-tools.js';
 import { WirelessHub, listLANAddresses } from '../../server/dist/wireless.js';
 import QRCode from 'qrcode';
@@ -17,6 +18,8 @@ app.setName('TapPilot');
 let window;
 let store;
 let diagnostics;
+let learning;
+const disabledExperiences = new Set();
 let active;
 let stopping = false;
 let modelTest;
@@ -95,10 +98,26 @@ async function begin(value, demo) {
       let result;
       if (demo) result = await runDemo(controller.signal, onEvent);
       else {
+        const scope = modelScope(model);
+        const learningSnapshot = (await learning.loadActive(app.getVersion(), scope.modelFamily, Date.now(), scope.modelProfile).catch(() => [])).filter(entry => !disabledExperiences.has(entry.id));
+        const runDiagnostics = [];
+        const usedExperiences = new Set();
         run.client = input.mode === 'wireless' ? createWirelessClient(wireless.forDevice(input.deviceId)) : await createUsbClient({ adbPath: await adbPath(), serial: input.serial });
         if (controller.signal.aborted) throw new ClientError('CANCELLED', '操作已取消。');
         result = await runAgent({ task: input.task, model, modelFetch, tools: run.client.tools, execute: (name, args, signal) => run.client.execute(name, args, signal), signal: controller.signal, onEvent, maxTurns: 24,
-          diagnosticVersion: app.getVersion(), onDiagnostic: event => { void diagnostics.append(event); } });
+          diagnosticVersion: app.getVersion(), learningSnapshot, onExperienceUsed: ids => ids.forEach(id => usedExperiences.add(id)),
+          onDiagnostic: event => { void diagnostics.append(event); if (runDiagnostics.length < 500) runDiagnostics.push(event); } });
+        // Local post-task hypotheses do not activate themselves or call a model.
+        // Failure conservatively disables advice for the next task; completed
+        // alone is not an independent success signal and never trains a success.
+        if (result.status === 'failed') {
+          usedExperiences.forEach(id => disabledExperiences.add(id));
+          await Promise.allSettled([...usedExperiences].map(id => learning.recordOutcome(id, 'failure')));
+        }
+        void (async () => {
+          const candidates = await summarizeCandidates(runDiagnostics, { hostVersion: app.getVersion(), ...scope });
+          if (candidates.length) await learning.addCandidates(candidates);
+        })().catch(() => {});
       }
       send({ type: 'run_finished', demo, status: result.status, answer: result.answer || '', metrics: result.metrics, ...(result.error ? { error: runtimeError(result.error) } : {}) });
     } catch (error) {
@@ -137,6 +156,7 @@ app.whenReady().then(async () => {
   // Separate privacy-whitelisted metadata sink. UI events contain answers and
   // must never be sent to persistent diagnostics.
   diagnostics = new DiagnosticStore({ rootDirectory: app.getPath('userData') });
+  learning = new LearningStore(app.getPath('userData'));
   modelFetch = createModelFetch();
   wireless = new WirelessSession({ startHub: options => WirelessHub.start(options), addresses: listLANAddresses,
     qr: value => QRCode.toDataURL(value, { errorCorrectionLevel: 'M', margin: 3, width: 300, color: { dark: '#171717', light: '#ffffff' } }),

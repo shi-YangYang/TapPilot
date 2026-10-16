@@ -14,7 +14,8 @@
     "approve": "node dist/approve.js",
     "test": "tsx --test test/*.test.ts",
     "diagnostics": "node dist/diagnostics/cli.js",
-    "eval": "node dist/eval/cli.js"
+    "eval": "node dist/eval/cli.js",
+    "learning": "node dist/learning/cli.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
