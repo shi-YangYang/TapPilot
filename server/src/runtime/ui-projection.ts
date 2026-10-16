@@ -17,7 +17,9 @@ function bounds(value: unknown): number[] | undefined {
 function meaningful(node: Json): boolean {
   if (hasText(node.text) || hasText(node.contentDescription)) return true;
   if (boolFields.some(key => node[key] === true) || node.enabled === false) return true;
-  if (["checked", "selected", "focused"].some(key => typeof node[key] === "boolean")) return true;
+  // New phone versions report explicit false states on every node. They remain
+  // visible on retained controls, but must not resurrect every empty layout.
+  if (["checked", "selected", "focused"].some(key => node[key] === true)) return true;
   // Resource IDs on otherwise empty layout wrappers do not make the wrappers actionable.
   // Keep unknown/custom widgets: their class or ID may be the only available meaning.
   const name = hasText(node.className) ? className(node.className) : "";

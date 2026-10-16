@@ -34,6 +34,7 @@ export interface Metrics {
   modelUiBytes?: number;
   rawUiBytes?: number;
   hostReads?: number;
+  preflightReads?: number;
 }
 export interface ClientEvent {
   type: string;

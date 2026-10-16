@@ -165,7 +165,11 @@ class AgentAccessibilityService : AccessibilityService() {
             if (!waitSlots.tryAcquire()) throw AgentError("BUSY", "At most two concurrent UI waits are supported", true)
             try { return waitForChange(params, canContinue) } finally { waitSlots.release() }
         }
-        return onMain {
+        return executeOnMain(method, params, canContinue)
+    }
+
+    private fun executeOnMain(method: String, params: JSONObject, canContinue: () -> Boolean, deadline: Long = Long.MAX_VALUE, gestureCompletion: GestureCompletion? = null): JSONObject =
+        onMain(deadline) {
             if (!connected) throw AgentError("SERVICE_UNAVAILABLE", "Accessibility service is disconnected", true)
             if (!canContinue()) throw AgentError("CANCELLED", "任务已停止")
             commandAllowed = canContinue
@@ -186,7 +190,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 "click_element" -> click(params)
                 "input_text" -> input(params)
                 "scroll" -> scroll(params)
-                "swipe" -> swipe(params)
+                "swipe" -> swipe(params, gestureCompletion)
                 "press_key" -> pressKey(params)
                 "open_settings" -> {
                     assertReady()
@@ -196,43 +200,67 @@ class AgentAccessibilityService : AccessibilityService() {
                 else -> throw AgentError("UNKNOWN_METHOD", "Unsupported method")
             } } finally { commandAllowed = { true } }
         }
-    }
 
     private fun actAndObserve(params: JSONObject, canContinue: () -> Boolean): JSONObject {
         ToolCatalog.validate("act_and_observe", params)
         if (Looper.myLooper() == Looper.getMainLooper()) throw AgentError("INVALID_THREAD", "Combined observation must run on a worker")
         val started = SystemClock.elapsedRealtime()
-        val action = dispatch(params.getString("action"), params.getJSONObject("arguments"), canContinue)
+        // Leave transport time within the host's 10s RPC timeout. Every main-looper
+        // command in this operation also respects this shared absolute deadline.
+        val deadline = started + 9_000
+        val operationSession = session
+        val operationAllowed = { canContinue() && session == operationSession }
+        val actionName = params.getString("action")
+        val gesture = if (actionName == "swipe") GestureCompletion() else null
+        val action = executeOnMain(actionName, params.getJSONObject("arguments"), operationAllowed, deadline, gesture)
         val acted = SystemClock.elapsedRealtime()
         val result = JSONObject().put("action", action)
-        var waited = acted
+        var observationMs = 0L
         try {
             val waitMs = params.optInt("waitMs", 350)
-            // An initial event can mark the start of an animation, before the new tree is ready.
-            // Debounce subsequent events without exceeding the caller's original wait budget.
-            try {
-                if (waitMs > 0) waitForSettledUi(action.getLong("revision"), waitMs, canContinue)
-            } finally { waited = SystemClock.elapsedRealtime() }
-            result.put("observation", dispatch("get_ui_tree", JSONObject().put("maxNodes", 300).put("maxDepth", 20), canContinue))
+            val waiter = ActionObservationWaiter(SystemClock::elapsedRealtime, { revision }, {
+                assertObservationActive(canContinue)
+                if (session != operationSession) throw AgentError("SERVICE_UNAVAILABLE", "Accessibility service session changed after the action", true)
+                if (SystemClock.elapsedRealtime() >= deadline) throw when (gesture?.state) {
+                    GestureCompletion.State.PENDING -> AgentError("GESTURE_COMPLETION_TIMEOUT", "The gesture was accepted but Android did not report completion before the operation deadline. Its effect is unknown; no action was repeated.")
+                    GestureCompletion.State.CANCELLED -> AgentError("GESTURE_CANCELLED", "Android cancelled the accepted gesture. No action was repeated; inspect the current UI.")
+                    else -> AgentError("COMMAND_TIMEOUT", "The action was accepted, but observation exceeded its deadline. Read the UI before deciding what to do next.")
+                }
+            }, ::waitForObservationSignal)
+            val observation = waiter.observeAfterAction(action.getLong("revision"), waitMs, deadline, gesture,
+                acted + action.optInt("durationMs", 0) + 750L) {
+                val readStarted = SystemClock.elapsedRealtime()
+                try {
+                    executeOnMain("get_ui_tree", JSONObject().put("maxNodes", 300).put("maxDepth", 20), operationAllowed, deadline)
+                } finally { observationMs += SystemClock.elapsedRealtime() - readStarted }
+            }
+            result.put("observation", observation)
         } catch (error: AgentError) {
             result.put("observation", JSONObject.NULL).put("observationError", JSONObject().put("code", error.code)
                 .put("message", error.message).put("retryable", error.retryable))
         }
+        if (gesture != null) action.put("completion", when (gesture.state) {
+            GestureCompletion.State.COMPLETED -> "completed"
+            GestureCompletion.State.CANCELLED -> "cancelled"
+            GestureCompletion.State.PENDING -> "unknown"
+        })
         val ended = SystemClock.elapsedRealtime()
-        return result.put("timings", JSONObject().put("actionMs", acted - started).put("waitMs", waited - acted)
-            .put("observationMs", ended - waited).put("totalMs", ended - started))
+        return result.put("timings", JSONObject().put("actionMs", acted - started).put("waitMs", ended - acted - observationMs)
+            .put("observationMs", observationMs).put("totalMs", ended - started))
     }
 
-    private fun <T> onMain(block: () -> T): T {
+    private fun <T> onMain(operationDeadline: Long = Long.MAX_VALUE, block: () -> T): T {
         if (Looper.myLooper() == Looper.getMainLooper()) return block()
-        val deadline = SystemClock.elapsedRealtime() + 8_000
+        val deadline = minOf(SystemClock.elapsedRealtime() + 8_000, operationDeadline)
+        val remaining = deadline - SystemClock.elapsedRealtime()
+        if (remaining <= 0) throw AgentError("COMMAND_TIMEOUT", "Command expired before dispatch. Read the UI again before retrying.")
         val task = FutureTask {
             commandDeadline = deadline
             try { checkDeadline(); block() } finally { commandDeadline = Long.MAX_VALUE }
         }
         main.post(task)
         try {
-            return task.get(8, TimeUnit.SECONDS)
+            return task.get(remaining, TimeUnit.MILLISECONDS)
         } catch (_: TimeoutException) {
             // FutureTask.run() is a no-op after cancellation: timed-out queued actions never execute.
             task.cancel(false)
@@ -298,6 +326,8 @@ class AgentAccessibilityService : AccessibilityService() {
             .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
             .put("clickable", node.isClickable).put("scrollable", node.isScrollable)
             .put("editable", node.isEditable).put("enabled", node.isEnabled).put("password", password)
+            .put("checkable", node.isCheckable).put("checked", node.isChecked)
+            .put("selected", node.isSelected).put("focused", node.isFocused)
             .put("visible", node.isVisibleToUser)
     }
 
@@ -491,7 +521,7 @@ class AgentAccessibilityService : AccessibilityService() {
         } finally { node.recycle() }
     }
 
-    private fun swipe(params: JSONObject): JSONObject {
+    private fun swipe(params: JSONObject, completion: GestureCompletion? = null): JSONObject {
         assertReady()
         val snapshotId = stringParam(params, "snapshotId", 128)
         val snapshot = snapshots[snapshotId] ?: throw stale()
@@ -505,9 +535,16 @@ class AgentAccessibilityService : AccessibilityService() {
         val duration = intParam(params, "durationMs", 350, 50, 2000)
         val path = Path().apply { moveTo(sx.toFloat(), sy.toFloat()); lineTo(ex.toFloat(), ey.toFloat()) }
         val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, duration.toLong())).build()
+        val gestureSession = session
         val callback = object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) { advanceRevision() }
-            override fun onCancelled(gestureDescription: GestureDescription?) { advanceRevision() }
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                completion?.finish(cancelled = false)
+                if (connected && session == gestureSession) advanceRevision(invalidateSnapshots = false)
+            }
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                completion?.finish(cancelled = true)
+                if (connected && session == gestureSession) advanceRevision(invalidateSnapshots = false)
+            }
         }
         assertReady()
         if (!dispatchGesture(gesture, callback, main)) throw AgentError("ACTION_REJECTED", "Android rejected the gesture")
@@ -571,19 +608,20 @@ class AgentAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun waitForSettledUi(since: Long, timeoutMs: Int, canContinue: () -> Boolean) {
-        val window = ObservationSettleWindow(SystemClock.elapsedRealtime(), timeoutMs, since)
+    private fun assertObservationActive(canContinue: () -> Boolean) {
+        if (!canContinue()) throw AgentError("CANCELLED", "任务已停止")
+        if (!connected) throw AgentError("SERVICE_UNAVAILABLE", "Accessibility service is disconnected", true)
+        if (stopped) throw AgentError("EMERGENCY_STOPPED", "Automation is stopped. Resume manually in the TapPilot phone app.")
+        assertUnlocked()
+    }
+
+    private fun waitForObservationSignal(observedRevision: Long, maxWaitMs: Long) {
         synchronized(changes) {
-            while (true) {
-                if (!canContinue()) throw AgentError("CANCELLED", "任务已停止")
-                if (!connected) throw AgentError("SERVICE_UNAVAILABLE", "Accessibility service is disconnected", true)
-                if (stopped) throw AgentError("EMERGENCY_STOPPED", "Automation is stopped. Resume manually in the TapPilot phone app.")
-                val remaining = window.nextWaitMs(SystemClock.elapsedRealtime(), revision)
-                if (remaining <= 0) return
+            if (revision == observedRevision && connected && !stopped) {
                 try {
-                    // The monitor prevents a lost event between reading revision and waiting.
-                    // Cancellation from a transport has no event, so check it at least every 100ms.
-                    changes.wait(minOf(remaining, 100L))
+                    // Revision is rechecked under the callback's monitor, avoiding lost events.
+                    // The worker wakes at least every 100ms for cancellation/lock checks.
+                    changes.wait(maxWaitMs)
                 } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw AgentError("SERVICE_UNAVAILABLE", "Wait cancelled because the service stopped", true)

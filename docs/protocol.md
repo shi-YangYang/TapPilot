@@ -10,9 +10,9 @@
 {"id":"synthetic-request","method":"act_and_observe","params":{"action":"click_element","arguments":{"snapshotId":"session:2","nodeId":"n7"},"waitMs":350}}
 ```
 
-`action` 仅允许 `click_element`、`input_text`、`scroll`、`swipe`、`press_key`、`open_settings`。`arguments` 按对应原工具的严格 schema 验证，不接受额外批准字段。`waitMs` 为 0–1500，默认 350；从 v0.3.9 起，等待动作结果 revision 之后的事件，再等待连续 120ms 无新事件，始终受原 `waitMs` 总上限约束。无事件或持续刷新时到上限结束，0 表示不等待。不把动作自身推进 revision 当作导航完成，也不反复读取完整树。新树仍需由模型检查，动画可能继续发生；公共 `wait_for_ui_change` 行为不变。
+`action` 仅允许 `click_element`、`input_text`、`scroll`、`swipe`、`press_key`、`open_settings`。`arguments` 按对应原工具的严格 schema 验证，不接受额外批准字段。`waitMs` 为 0–1500，默认 350；从 v0.3.9 起，等待动作结果 revision 之后的事件，再等待连续 120ms 无新事件，始终受原 `waitMs` 总上限约束。v0.3.16 的组合手势先等待 Android 完成回调，再开始这个观察预算；回调等待有独立上限，整个组合调用受 9 秒内部期限约束。无事件或持续刷新时到上限结束，0 表示不等待。不把动作自身推进 revision 当作导航完成。根节点暂时为空时，仅在剩余观察预算内等新事件后补读，最多补读两次，不重新执行动作。新树仍需由模型检查，动画可能继续发生；公共 `wait_for_ui_change` 行为不变。
 
-结果含 `action`（原动作结果）、`observation`（完整新快照）、`timings`（`actionMs`、`waitMs`、`observationMs`、`totalMs`）。动作失败时返回 `ok:false`；动作已接受但观察失败时返回 `ok:true`、保留 `action` 并附 `observationError`。后者须重新读取，不可重放动作。
+结果含 `action`（原动作结果）、`observation`（完整新快照）、`timings`（`actionMs`、`waitMs`、`observationMs`、`totalMs`）。动作失败时返回 `ok:false`；动作已接受但观察失败时返回 `ok:true`、保留 `action` 并附 `observationError`。后者不可重放动作。`GESTURE_CANCELLED` / `GESTURE_COMPLETION_TIMEOUT` 分别表示手势中断/未确认完成，组合结果保留 `accepted:true`，并标记 `completion:"cancelled"/"unknown"`；桌面停止任务，避免把未知结果当作可安全重试。正常完成的组合手势标记 `completion:"completed"`。
 
 MCP manual 模式继续通过原有独立 CLI 批准内部点击/输入/手势的单次参数，组合调用不改变批准通道。宿主记录新的 observation 快照；观察失败时旧引用已清除。独立客户端另对疑似敏感提交停止，交用户在手机手工完成。
 
@@ -20,7 +20,7 @@ MCP manual 模式继续通过原有独立 CLI 批准内部点击/输入/手势�
 
 模型直接检查返回的 `observation`，并用它的 `snapshotId/nodeId` 执行下一步，不需要为取得节点再次读取。动作顶层的 `revision` 仍是接受动作时的版本，观察有自己更新后的版本。目标未出现、界面仍在变化、树被截断或节点失效时，仍可读取或等待以补足证据；有界事件等待不保证所有页面加载完成。派发后即使超时或断线，也清除旧快照和批准；观察内容无效时保留已接受动作、返回 `observation:null` 与 `observationError`，不得自动重放。
 
-发给模型的 UI 省略空字符串、null、默认 false 属性（保留 `enabled:false`）；控制器仍使用完整快照校验。节点身份、父子关系、顺序、边界和文字不变。
+发给模型的 UI 省略空字符串、null、默认 false 能力属性（保留 `enabled/checked/selected/focused:false`）；控制器仍使用完整快照校验。节点身份、父子关系、顺序、边界和文字不变。
 
 ## 通道与消息边界
 
@@ -63,7 +63,7 @@ MCP 外层由官方 SDK 处理，工具结果在 `structuredContent` 及文本 c
 | `click_element` | `snapshotId,nodeId` | 原生点击；可明确报告向上选择的可点击祖先 |
 | `input_text` | `snapshotId,nodeId,text` | `ACTION_SET_TEXT` 替换整个字段，空串清空；最多 4096 字符，不提供 Enter/发送动作 |
 | `scroll` | `snapshotId,nodeId,direction` | `direction` 为 `forward/backward/up/down/left/right`，目标必须为可滚动节点 |
-| `swipe` | `snapshotId,startX,startY,endX,endY,durationMs?` | 绑定快照的屏幕像素手势；Android 接受后返回 `completion:"pending"`，不代表已完成 |
+| `swipe` | `snapshotId,startX,startY,endX,endY,durationMs?` | 绑定快照的屏幕像素手势；直接设备调用接受后返回 `completion:"pending"`；组合调用从 v0.3.16 起等待回调并报告完成状态 |
 | `press_key` | `key` | `back/home/recents` 三种系统全局动作 |
 | `wait_for_ui_change` | `sinceRevision,timeoutMs?,selector?` | `changed,timedOut,matched,revision`；带 selector 时还含匹配节点及快照元数据 |
 | `open_settings` | `{}` | 标准 `Settings.ACTION_SETTINGS` 打开设置首页，后续仍靠树选择页面 |
@@ -93,9 +93,9 @@ selector 支持 `text`、`textContains`、`resourceId`、`contentDescription`、
 
 每次服务连接有独立 session；UI 事件推动 revision。快照以 session、revision 和本次采集身份关联，返回的节点引用只在所属快照有效，不能将 resourceId、文本、树路径或列表下标视为永久 ID。
 
-节点动作使用调用者刚刚读到的 `snapshotId` 和 `nodeId`。`snapshotId` 格式为服务 UUID 加采集计数，`nodeId` 如 `n0`，仅在该快照内有意义。Android 最多保留四份不可变快照描述，而不是跨请求保留活的 `AccessibilityNodeInfo`。相关事件及被接受的动作都会递增 revision；窗口变化、生命周期变化、已接受动作和急停清空缓存。内容、滚动、文本事件暂时保留快照，但 revision 不同时必须重新采集同范围的完整树：窗口、包名、节点数量、路径和全部指纹均一致才允许继续，截断或任何差异均返回失效错误。随后仍重新读取根节点并验证目标及可点击祖先；指纹包含勾选、选中和焦点状态。相同标签可能对应多个节点，调用者必须检查匹配项，不能无提示选择第一个。
+节点动作使用调用者刚刚读到的 `snapshotId` 和 `nodeId`。`snapshotId` 格式为服务 UUID 加采集计数，`nodeId` 如 `n0`，仅在该快照内有意义。Android 最多保留四份不可变快照描述，而不是跨请求保留活的 `AccessibilityNodeInfo`。相关事件及被接受的动作都会递增 revision；窗口变化、生命周期变化、已接受动作和急停清空缓存。内容、滚动、文本事件以及手势完成/取消回调暂时保留有界快照，但 revision 不同时必须重新采集同范围的完整树：窗口、包名、节点数量、路径和全部指纹均一致才允许继续，截断或任何差异均返回失效错误。随后仍重新读取根节点并验证目标及可点击祖先；指纹包含勾选、选中和焦点状态。相同标签可能对应多个节点，调用者必须检查匹配项，不能无提示选择第一个。
 
-`get_ui_tree` 用精简节点列表和 `parentId` 表示层次。节点携带 `nodeId`、`text`、`contentDescription`、`resourceId`、`className`、`bounds`（屏幕像素 `[left,top,right,bottom]`）、`clickable`、`scrollable`、`editable`、`enabled`、`password`、`visible`。密码文本和描述返回 `[REDACTED]`；普通文字及描述各最多返回 1000 字符；ID、类型、包名及 Activity 提示等输出字符串有 512 字符上限。节点数、遍历深度、访问预算或序列化体积耗尽时，顶层 `truncated:true`，即使 `maxNodes:500` 也不保证可返回 500 个节点；单字段字符上限不单独标记，因此长文本也不能视为完整内容。
+`get_ui_tree` 用精简节点列表和 `parentId` 表示层次。节点携带 `nodeId`、`text`、`contentDescription`、`resourceId`、`className`、`bounds`（屏幕像素 `[left,top,right,bottom]`）、`clickable`、`scrollable`、`editable`、`enabled`、`password`、`visible`；v0.3.16 另提供 `checkable/checked/selected/focused`，明确状态用于目标核对和结果判断。密码文本和描述返回 `[REDACTED]`；普通文字及描述各最多返回 1000 字符；ID、类型、包名及 Activity 提示等输出字符串有 512 字符上限。节点数、遍历深度、访问预算或序列化体积耗尽时，顶层 `truncated:true`，即使 `maxNodes:500` 也不保证可返回 500 个节点；单字段字符上限不单独标记，因此长文本也不能视为完整内容。
 
 ```json
 {

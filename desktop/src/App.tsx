@@ -28,7 +28,7 @@ function TaskPage({ client: c }: { client: ClientController }) {
   }));
   const finished = c.run.phase !== 'idle' && c.run.phase !== 'running';
   const summary = { idle: '任务进度', running: '正在执行', completed: '已完成', cancelled: '已取消', failed: '未完成' }[c.run.phase];
-  const { modelRequestBytes, modelUiBytes, rawUiBytes, hostReads } = c.run.metrics;
+  const { modelRequestBytes, modelUiBytes, rawUiBytes, hostReads, preflightReads } = c.run.metrics;
   const uiReduction = rawUiBytes !== undefined && rawUiBytes > 0 && modelUiBytes !== undefined ? Math.max(0, Math.min(100, Math.round((1 - modelUiBytes / rawUiBytes) * 100))) : undefined;
   return <section id="page-task" className="task-page" data-phase={c.run.phase} hidden={c.page !== 'task'}>
     <div className="page-heading task-heading"><div><p className="section-eyebrow">新任务</p><h1>想让手机做什么？</h1></div><span hidden={c.run.phase === 'idle'}><RunBadge client={c} /></span></div>
@@ -60,6 +60,7 @@ function TaskPage({ client: c }: { client: ClientController }) {
       <div><dt>请求 / 工具调用</dt><dd id="metric-rounds">{c.run.metrics.modelRequests} / {c.run.metrics.toolCalls}</dd></div>
       {modelRequestBytes !== undefined && <div><dt>模型请求数据</dt><dd id="metric-payload">{(modelRequestBytes / 1024).toFixed(1)} KiB</dd></div>}
       {uiReduction !== undefined && <div><dt>界面数据压缩</dt><dd id="metric-ui-reduction">减少 {uiReduction}% · {((rawUiBytes || 0) / 1024).toFixed(1)} → {((modelUiBytes || 0) / 1024).toFixed(1)} KiB</dd></div>}
+      {preflightReads !== undefined && <div><dt>执行前核对</dt><dd id="metric-preflight-reads">{preflightReads} 次</dd></div>}
       {hostReads !== undefined && <div><dt>自动观察</dt><dd id="metric-host-reads">{hostReads} 次</dd></div>}
     </dl></details>}
   </section>;

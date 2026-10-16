@@ -74,6 +74,21 @@ test("partial find results keep every match and missing parents are not presente
   assert.equal(projected.matched, true);
 });
 
+test("explicit false states do not resurrect layout wrappers, but remain on controls", () => {
+  const states = { checkable: false, checked: false, selected: false, focused: false };
+  const source = observation([
+    node("root", null, states),
+    node("wrapper", "root", { ...states, className: "android.widget.LinearLayout" }),
+    node("toggle", "wrapper", { ...states, checkable: true, className: "android.widget.Switch", clickable: true }),
+  ]);
+  const projected = projectToolResult(source) as Json;
+  assert.deepEqual(projected.nodes.map((entry: Json) => entry.nodeId), ["toggle"]);
+  assert.equal(projected.nodes[0].checkable, true);
+  assert.equal(projected.nodes[0].checked, false);
+  assert.equal(projected.nodes[0].selected, false);
+  assert.equal(projected.nodes[0].focused, false);
+});
+
 test("tool envelopes retain host outcomes and errors while omitting telemetry, unknown metadata and repeated targets", () => {
   const target = node("n3", "n1", { text: "Old synthetic UI label", clickable: true });
   const source = {

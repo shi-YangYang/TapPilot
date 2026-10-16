@@ -142,6 +142,65 @@ test("a changed combined observation does not issue a host refresh", async () =>
   assert.equal(result.metrics.hostReads, 0);
 });
 
+test("a preflight target refusal supplies the fresh UI without another host or model read round", async () => {
+  const calls: string[] = [];
+  const { result } = await scenario((turn, body) => {
+    assertValidToolPairs(body);
+    if (turn === 0) return [action()];
+    const latest = toolResults(body).at(-1)!;
+    assert.equal(latest.ok, false);
+    assert.equal(latest.error.code, "TARGET_CHANGED");
+    assert.equal(latest.observation.snapshotId, "fresh-before-dispatch");
+    assert.equal(latest.hostAction, undefined, "a refused target must never be recorded as accepted");
+    assert.equal(advertised(body).includes("get_ui_tree"), false);
+    return undefined;
+  }, async name => {
+    calls.push(name);
+    return name === "get_ui_tree" ? observed("initial") : {
+      ok: false, error: { code: "TARGET_CHANGED", message: "Target moved to a different context; no action sent." },
+      observation: tree("fresh-before-dispatch", "Synthetic new context"), meta: { preflightRead: true, preflightMs: 12 },
+    };
+  });
+  assert.equal(result.status, "completed");
+  assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
+  assert.equal(result.metrics.preflightReads, 1);
+  assert.equal(result.metrics.hostReads, 0);
+  assert.equal(result.metrics.modelRequests, 2);
+});
+
+test("partial or unmarked failed-action observations cannot become current decision evidence", async () => {
+  for (const condition of ["partial", "unmarked", "dispatched-error"]) {
+    const { result } = await scenario((turn, body) => {
+      if (turn === 0) return [action()];
+      assert.ok(advertised(body).includes("get_ui_tree"));
+      return undefined;
+    }, async name => name === "get_ui_tree" ? observed("initial") : {
+      ok: false, error: { code: condition === "dispatched-error" ? "ACTION_REJECTED" : "TARGET_CHANGED" },
+      observation: { ...tree("unusable"), truncated: condition === "partial" },
+      meta: { preflightRead: condition !== "unmarked" },
+    });
+    assert.equal(result.status, "failed");
+    assert.match(result.error!, /NO_OBSERVATION/);
+    assert.equal(result.metrics.hostReads, 0);
+  }
+});
+
+test("interrupted or unconfirmed gestures stop without refreshing or replaying accepted actions", async () => {
+  for (const code of ["GESTURE_CANCELLED", "GESTURE_COMPLETION_TIMEOUT"]) {
+    const calls: string[] = [];
+    const { result } = await scenario(() => [action()], async name => {
+      calls.push(name);
+      return name === "get_ui_tree" ? observed("initial") : {
+        ok: true, result: { action: { accepted: true, completion: code === "GESTURE_CANCELLED" ? "cancelled" : "unknown" }, observation: null, observationError: { code } },
+      };
+    });
+    assert.equal(result.status, "failed");
+    assert.match(result.error!, new RegExp(code));
+    assert.deepEqual(calls, ["get_ui_tree", "act_and_observe"]);
+    assert.equal(result.metrics.modelRequests, 1);
+  }
+});
+
 test("an explicit full read later in the same model batch satisfies verification without an extra read", async () => {
   let reads = 0;
   const { result } = await scenario((turn, body) => {

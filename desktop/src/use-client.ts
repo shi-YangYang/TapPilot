@@ -7,6 +7,7 @@ const emptyMetrics: Metrics = { totalMs: 0, modelMs: 0, toolMs: 0, modelRequests
 const labels: Record<string, string> = { get_ui_tree: '读取当前界面', find_element: '查找目标', get_current_app: '查看当前应用', get_device_info: '读取设备状态', open_settings: '打开系统设置', click_element: '原生点击', tap_element: '点按目标', input_text: '输入文字', scroll: '滚动页面', swipe: '滑动屏幕', press_key: '系统导航', wait_for_ui_change: '等待界面变化', act_and_observe: '操作并查看结果', take_screenshot: '查看截图', open_app: '打开应用' };
 const stepErrors: Record<string, string> = {
   STALE_SNAPSHOT: '界面已更新，目标已失效', NO_KNOWN_SNAPSHOT: '需要重新读取界面', READ_REQUIRED: '需要重新读取界面',
+  TARGET_CHANGED: '目标已变化，未执行操作', GESTURE_CANCELLED: '手势被中断', GESTURE_COMPLETION_TIMEOUT: '未能确认手势完成',
   NODE_NOT_FOUND: '目标不存在', NODE_NOT_VISIBLE: '目标不可见', NODE_DISABLED: '目标已禁用', NODE_NOT_ACTIONABLE: '目标无法操作',
   NOT_CLICKABLE: '目标不可点击', NOT_EDITABLE: '目标无法输入', NOT_SCROLLABLE: '该区域无法滚动', ACTION_REJECTED: '手机未接受操作',
   DEVICE_LOCKED: '请先解锁手机', SERVICE_UNAVAILABLE: '无障碍服务未连接', EMERGENCY_STOPPED: '自动化已停止',
@@ -27,6 +28,9 @@ const initialRun: RunState = { phase: 'idle', demo: false, answer: '', metrics: 
 function runReducer(state: RunState, event: ClientEvent): RunState {
   if (event.type === 'run_started') return { ...initialRun, phase: 'running', demo: Boolean(event.demo), metrics: { ...emptyMetrics } };
   if (event.type === 'tick') return { ...state, metrics: { ...state.metrics, totalMs: event.durationMs || 0 } };
+  if (event.type === 'model_correction') return { ...state, steps: [...state.steps.map(step => ({ ...step, active: false })), {
+    id: `correction-${event.turn}`, label: '正在纠正操作格式', active: false,
+  }].slice(-120) };
   if (event.type === 'model_start' || event.type === 'tool_start') {
     const model = event.type === 'model_start';
     const metrics = { ...state.metrics, modelRequests: state.metrics.modelRequests + Number(model), toolCalls: state.metrics.toolCalls + Number(!model) };
