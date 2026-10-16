@@ -3,6 +3,8 @@ import test from "node:test";
 import { Adb } from "../src/adb.js";
 import type { PhoneBridge } from "../src/bridge.js";
 import { compactUi, createPhoneClient } from "../src/client-tools.js";
+import { prepareTargetRefresh, rebindRefreshedTarget } from "../src/client-target-refresh.js";
+import { AgentError } from "../src/errors.js";
 
 type Json = Record<string, any>;
 function node(nodeId: string, overrides: Json = {}): Json {
@@ -103,6 +105,169 @@ test("same-window page titles and chat recipients are part of target context", a
     const fresh = newer(old);
     fresh.nodes[1].text = "联系人乙";
     rejected(await attempt({ old, fresh }, action, { snapshotId: old.snapshotId, nodeId: "button", ...(action === "input_text" ? { text: "测试内容" } : {}) }));
+  }
+});
+
+function listing(): Json {
+  return tree([
+    root,
+    node("title", { text: "商品列表", bounds: [0, 0, 300, 25] }),
+    node("list", { scrollable: true, className: "androidx.recyclerview.widget.RecyclerView", bounds: [0, 30, 400, 580] }),
+    node("item-a", { parentId: "list", text: "条目甲", resourceId: "app:id/row", className: "android.view.ViewGroup", clickable: true, bounds: [10, 40, 390, 240] }),
+    node("price-a", { parentId: "item-a", text: "¥100", bounds: [20, 60, 100, 90] }),
+    node("name-a", { parentId: "item-a", text: "商品甲", clickable: true, bounds: [20, 100, 150, 130] }),
+    { ...button, parentId: "item-a", bounds: [20, 160, 120, 220] },
+    node("item-b", { parentId: "list", text: "条目乙", resourceId: "app:id/row", className: "android.view.ViewGroup", clickable: true, bounds: [10, 300, 390, 560] }),
+    node("status-b", { parentId: "item-b", text: "库存 10", bounds: [20, 320, 150, 350] }),
+    node("button-b", { parentId: "item-b", clickable: true, bounds: [20, 400, 150, 450] }),
+    node("button-label-b", { parentId: "button-b", text: "了解详情", bounds: [30, 410, 140, 440] }),
+  ]);
+}
+function row(source: Json, id: string): Json { return source.nodes.find((entry: Json) => entry.nodeId === id)!; }
+
+test("an identified independent collection row may update a label before one whole-item click", async () => {
+  for (const [action, nodeId] of [["tap_element", "item-a"], ["tap_element", "price-a"], ["click_element", "item-a"]]) {
+    const old = listing(), fresh = newer(old);
+    row(fresh, "status-b-new").text = "库存 9";
+    const actual = await attempt({ old, fresh }, action, { snapshotId: old.snapshotId, nodeId });
+    assert.equal(actual.result.ok, true);
+    assert.deepEqual(actual.calls.map((call) => call.method), ["get_ui_tree", "get_ui_tree", "act_and_observe"]);
+    if (action === "tap_element") assert.equal((actual.result.result as Json).action.targetNodeId, `${nodeId}-new`);
+  }
+});
+
+test("the selected whole row and global titles remain protected when a sibling label changes", async () => {
+  for (const [id, text] of [["price-a", "¥200"], ["name-a", "商品乙"], ["title", "联系人乙"]]) {
+    const old = listing(), fresh = newer(old);
+    row(fresh, "status-b-new").text = "库存 9";
+    row(fresh, `${id}-new`).text = text;
+    // Every label inside the selected item, including its nested controls,
+    // remains exact even when another identified item has a dynamic label.
+    rejected(await attempt({ old, fresh }, "tap_element", { snapshotId: old.snapshotId, nodeId: "item-a" }));
+  }
+});
+
+test("independent row identity, nested control labels, state and exact skeleton must stay unchanged", async () => {
+  const changes: ((fresh: Json) => void)[] = [
+    (fresh) => { row(fresh, "item-b-new").text = "另一条目"; },
+    (fresh) => { row(fresh, "button-label-b-new").text = "另一操作"; },
+    (fresh) => { row(fresh, "button-b-new").enabled = false; },
+    (fresh) => { row(fresh, "status-b-new").selected = true; },
+    (fresh) => { row(fresh, "status-b-new").visible = false; },
+    (fresh) => { fresh.nodes.push(node("new-label", { parentId: "item-b-new", text: "新增内容", bounds: [20, 460, 150, 490] })); },
+    (fresh) => { fresh.nodes = fresh.nodes.filter((entry: Json) => entry.nodeId !== "button-b-new" && entry.nodeId !== "button-label-b-new"); },
+    (fresh) => { const index = fresh.nodes.findIndex((entry: Json) => entry.nodeId === "status-b-new"); fresh.nodes.push(...fresh.nodes.splice(index, 1)); },
+  ];
+  for (const change of changes) {
+    const old = listing(), fresh = newer(old);
+    row(fresh, "status-b-new").text = "库存 9";
+    change(fresh);
+    rejected(await attempt({ old, fresh }, "tap_element", { snapshotId: old.snapshotId, nodeId: "item-a" }));
+  }
+});
+
+test("unidentified, duplicate or reordered row groups do not authorize text relaxation", async () => {
+  for (const variant of ["unidentified", "duplicate", "reordered"]) {
+    const old = listing();
+    if (variant === "unidentified") row(old, "item-b").text = "";
+    if (variant === "duplicate") row(old, "item-b").text = "条目甲";
+    const fresh = newer(old);
+    row(fresh, "status-b-new").text = "库存 9";
+    if (variant === "reordered") {
+      const index = fresh.nodes.findIndex((entry: Json) => entry.nodeId === "item-a-new");
+      fresh.nodes.push(...fresh.nodes.splice(index, 1));
+    }
+    rejected(await attempt({ old, fresh }, "tap_element", { snapshotId: old.snapshotId, nodeId: "item-a" }));
+  }
+});
+
+test("overlapping rows, escaped labels and new occluding controls cannot be treated as independent updates", async () => {
+  for (const variant of ["overlap", "escaped", "overlay"]) {
+    const old = listing(), fresh = newer(old);
+    row(fresh, "status-b-new").text = "库存 9";
+    if (variant === "overlap") row(fresh, "item-b-new").bounds = [10, 100, 390, 560];
+    if (variant === "escaped") row(fresh, "status-b-new").bounds = [20, 170, 100, 210];
+    if (variant === "overlay") fresh.nodes.push(node("overlay", { parentId: "root-new", text: "新浮层", clickable: true, bounds: [20, 160, 120, 220] }));
+    rejected(await attempt({ old, fresh }, "tap_element", { snapshotId: old.snapshotId, nodeId: "item-a" }));
+  }
+});
+
+test("a target outside the identified list keeps the original strict page context", async () => {
+  const old = listing();
+  Object.assign(row(old, "button"), { parentId: "root", bounds: [310, 0, 390, 25] });
+  const fresh = newer(old);
+  row(fresh, "status-b-new").text = "库存 9";
+  rejected(await attempt({ old, fresh }));
+});
+
+test("ScrollView and RecyclerView recipient forms keep input and embedded-button context strict", async () => {
+  for (const className of ["android.widget.ScrollView", "androidx.recyclerview.widget.RecyclerView"]) {
+    for (const action of ["input_text", "tap_element", "click_element"]) {
+      const old = listing();
+      row(old, "list").className = className;
+      row(old, "item-a").text = "留言";
+      row(old, "item-b").text = "收件人";
+      row(old, "status-b").text = "联系人甲";
+      if (action === "input_text") Object.assign(row(old, "button"), { text: "", editable: true, clickable: false });
+      const fresh = newer(old);
+      row(fresh, "status-b-new").text = "联系人乙";
+      rejected(await attempt({ old, fresh }, action, {
+        snapshotId: old.snapshotId, nodeId: "button", ...(action === "input_text" ? { text: "测试内容" } : {}),
+      }));
+    }
+  }
+});
+
+test("generic scrollable groups and nonclickable product cards retain strict context", async () => {
+  for (const variant of ["generic", "nonclickable-item", "nonclickable-card-title"]) {
+    const old = listing();
+    if (variant === "generic") row(old, "list").className = "android.widget.ScrollView";
+    if (variant === "nonclickable-item") row(old, "item-b").clickable = false;
+    if (variant === "nonclickable-card-title") row(old, "item-a").clickable = false;
+    const fresh = newer(old);
+    row(fresh, "status-b-new").text = "库存 9";
+    if (variant === "nonclickable-card-title") row(fresh, "name-a-new").text = "商品乙";
+    rejected(await attempt({ old, fresh }, "tap_element", {
+      snapshotId: old.snapshotId, nodeId: variant === "nonclickable-card-title" ? "button" : "item-a",
+    }));
+  }
+});
+
+test("nonclickable fields and controls cannot acquire the whole-item navigation exception", async () => {
+  for (const action of ["tap_element", "click_element"]) {
+    for (const capability of ["editable", "checkable", "scrollable"]) {
+      const old = listing();
+      row(old, "price-a")[capability] = true;
+      const fresh = newer(old);
+      row(fresh, "status-b-new").text = "联系人乙";
+      rejected(await attempt({ old, fresh }, action, { snapshotId: old.snapshotId, nodeId: "price-a" }));
+    }
+  }
+});
+
+test("target-refresh errors give fixed reasons without retaining UI labels", () => {
+  const old = tree(), target = { snapshotId: old.snapshotId, nodeId: "button" };
+  const reference = prepareTargetRefresh(old, target, "tap_element")!;
+  const cases: [string, (fresh: Json) => void][] = [
+    ["TREE_INCOMPLETE", (fresh) => { fresh.truncated = true; }],
+    ["TREE_INCOMPLETE", (fresh) => { delete fresh.nodes[1].checked; }],
+    ["SESSION_CHANGED", (fresh) => { fresh.snapshotId = "new-session:1"; }],
+    ["SESSION_CHANGED", (fresh) => { fresh.revision = 0; }],
+    ["WINDOW_CHANGED", (fresh) => { fresh.windowId = 99; }],
+    ["TARGET_IDENTITY_CHANGED", (fresh) => { fresh.nodes[1].text = "另一个目标"; }],
+    ["TARGET_IDENTITY_CHANGED", (fresh) => { fresh.nodes[1].enabled = false; }],
+    ["TARGET_AMBIGUOUS", (fresh) => { fresh.nodes.push({ ...fresh.nodes[1], nodeId: "duplicate" }); }],
+    ["PAGE_CONTEXT_CHANGED", (fresh) => { fresh.nodes.push(node("title", { parentId: "root-new", text: "新页面标题" })); }],
+  ];
+  for (const [reason, change] of cases) {
+    const fresh = newer(old);
+    change(fresh);
+    assert.throws(() => rebindRefreshedTarget(reference, fresh, target), (error: unknown) => {
+      assert.ok(error instanceof AgentError);
+      assert.equal(error.code, "TARGET_CHANGED");
+      assert.deepEqual(error.details, { reason });
+      return true;
+    });
   }
 });
 

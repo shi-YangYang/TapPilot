@@ -26,7 +26,7 @@ const page = path.join(app.getAppPath(), 'dist', 'index.html');
 const pageUrl = pathToFileURL(page).href;
 const publicEvent = value => {
   const result = {};
-  for (const key of ['type', 'turn', 'toolName', 'action', 'ok', 'errorCode', 'observationChanged', 'durationMs', 'metrics', 'answer']) if (value[key] !== undefined) result[key] = value[key];
+  for (const key of ['type', 'turn', 'toolName', 'action', 'ok', 'errorCode', 'errorReason', 'observationChanged', 'durationMs', 'metrics', 'answer']) if (value[key] !== undefined) result[key] = value[key];
   if (value.error) result.error = runtimeError(value.error);
   return result;
 };

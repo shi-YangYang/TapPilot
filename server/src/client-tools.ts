@@ -293,7 +293,7 @@ export function createPhoneClient(transport: PhoneBridge, deviceAccess: Adb): Ph
               } catch (error) {
                 const code = publicError(error).code;
                 if (["NODE_NOT_ACTIONABLE", "READ_REQUIRED", "STALE_SNAPSHOT", "NODE_NOT_FOUND"].includes(code)) {
-                  throw new AgentError("TARGET_CHANGED", "The refreshed control is no longer safely actionable. No action was sent; inspect the returned observation.", true);
+                  throw new AgentError("TARGET_CHANGED", "The refreshed control is no longer safely actionable. No action was sent; inspect the returned observation.", true, { reason: "TARGET_NOT_ACTIONABLE" });
                 }
                 throw error;
               }

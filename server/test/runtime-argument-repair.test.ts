@@ -143,17 +143,24 @@ test("cancelling at correction feedback prevents the next model request and all 
   assert.deepEqual(dispatched.map(item => item.name), ["get_ui_tree"]);
 });
 
-test("argument correction does not extend turn or token budgets or permit an uncorrected completion claim", async () => {
+test("argument correction does not extend the turn limit or permit an uncorrected completion claim", async () => {
   const invalid = call("invalid", "act_and_observe", {});
   const limited = await scenario(() => ({ calls: [invalid] }), { maxTurns: 1 });
   assert.match(limited.result.error!, /TURN_LIMIT/);
   assert.equal(limited.result.metrics.modelRequests, 1);
-  const tokens = await scenario(() => ({ calls: [invalid], tokens: 120_001 }));
-  assert.match(tokens.result.error!, /TOKEN_BUDGET/);
-  assert.equal(tokens.events.some(event => event.type === "model_correction"), false);
   const uncorrected = await scenario(turn => turn === 0 ? { calls: [invalid] } : {});
   assert.match(uncorrected.result.error!, /INVALID_TOOL_ARGUMENTS/);
   assert.deepEqual(uncorrected.dispatched.map(item => item.name), ["get_ui_tree"]);
+});
+
+test("large reported token usage does not stop valid actions or argument correction", async () => {
+  const { result, dispatched, events } = await scenario(turn => turn === 0 ? {
+    calls: [call("invalid", "act_and_observe", {})], tokens: 120_001,
+  } : turn === 1 ? { calls: [call("corrected")], tokens: 250_000 } : { tokens: 500_000 });
+  assert.equal(result.status, "completed");
+  assert.equal(result.metrics.modelRequests, 3);
+  assert.deepEqual(dispatched.map(item => item.name), ["get_ui_tree", "act_and_observe"]);
+  assert.equal(events.filter(event => event.type === "model_correction").length, 1);
 });
 
 test("a phone-side argument failure after dispatch does not enter the model-format correction path", async () => {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { ClientEvent, ConfigInput, ConnectionInput, ConnectionMode, LanAddress, Metrics, PageName, PairingResult, PublicConfig, Reply, UsbDevice, WirelessState } from './client-types';
 
-const initialConfig: PublicConfig = { baseUrl: '', model: '', maxOutputTokens: 8192, hasKey: false, adbPath: '', serial: '', mode: 'wireless' };
+const initialConfig: PublicConfig = { baseUrl: '', model: '', hasKey: false, adbPath: '', serial: '', mode: 'wireless' };
 const emptyWireless: WirelessState = { connected: false, closed: true, pairingAvailable: false };
 const emptyMetrics: Metrics = { totalMs: 0, modelMs: 0, toolMs: 0, modelRequests: 0, toolCalls: 0 };
 const labels: Record<string, string> = { get_ui_tree: '读取当前界面', find_element: '查找目标', get_current_app: '查看当前应用', get_device_info: '读取设备状态', open_settings: '打开系统设置', click_element: '原生点击', tap_element: '点按目标', input_text: '输入文字', scroll: '滚动页面', swipe: '滑动屏幕', press_key: '系统导航', wait_for_ui_change: '等待界面变化', act_and_observe: '操作并查看结果', take_screenshot: '查看截图', open_app: '打开应用' };
@@ -28,6 +28,13 @@ const stepReasons: Record<string, string> = {
   TARGET_CLIPPED: '目标超出可见区域',
   AMBIGUOUS_TOUCH_TARGET: '触控区域重叠，无法确定目标',
   TOUCH_TARGET_MISMATCH: '触控位置与目标不一致',
+  TREE_INCOMPLETE: '刷新后的界面信息不完整',
+  SESSION_CHANGED: '手机连接状态已变化',
+  WINDOW_CHANGED: '当前页面已切换',
+  TARGET_IDENTITY_CHANGED: '目标内容或状态已变化',
+  TARGET_AMBIGUOUS: '出现多个相似目标，无法确定',
+  PAGE_CONTEXT_CHANGED: '目标所在页面内容已变化',
+  TARGET_NOT_ACTIONABLE: '刷新后的目标无法操作',
 };
 const toolLabel = (event: ClientEvent) => labels[event.action || event.toolName || ''] || '执行手机操作';
 function stepResult(event: ClientEvent): string | undefined {
@@ -67,7 +74,7 @@ export function useClient() {
   const api = window.tapPilot;
   const [page, setPage] = useState<PageName>('task');
   const [config, setConfig] = useState(initialConfig);
-  const [draft, setDraft] = useState({ baseUrl: '', model: '', maxOutputTokens: '8192', apiKey: '', adbPath: '', clearKey: false });
+  const [draft, setDraft] = useState({ baseUrl: '', model: '', apiKey: '', adbPath: '', clearKey: false });
   const [ready, setReady] = useState(false);
   const [version, setVersion] = useState('');
   const [notice, setNotice] = useState({ text: '', error: false });
@@ -106,7 +113,7 @@ export function useClient() {
   }, [notify]);
   const showConfig = useCallback((next: PublicConfig) => {
     setConfig(next);
-    setDraft({ baseUrl: next.baseUrl || '', model: next.model || '', maxOutputTokens: String(next.maxOutputTokens ?? 8192), apiKey: '', adbPath: next.adbPath || '', clearKey: false });
+    setDraft({ baseUrl: next.baseUrl || '', model: next.model || '', apiKey: '', adbPath: next.adbPath || '', clearKey: false });
     setSelectedSerial(previous => previous || next.serial || '');
     setMode(next.mode || 'usb');
   }, []);
@@ -162,7 +169,7 @@ export function useClient() {
   const busy = running || runPending;
   const save = async () => {
     setSaving(true);
-    const input: ConfigInput = { ...draft, maxOutputTokens: Number(draft.maxOutputTokens), serial: selectedSerial, mode };
+    const input: ConfigInput = { ...draft, serial: selectedSerial, mode };
     const result = await request(() => api.saveConfig(input));
     setDraft(previous => ({ ...previous, apiKey: '' })); setSaving(false);
     if (result) { showConfig(result); notify('已保存。'); }

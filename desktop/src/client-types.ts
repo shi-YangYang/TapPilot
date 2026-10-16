@@ -3,7 +3,6 @@ export type PageName = 'task' | 'model' | 'device';
 export interface PublicConfig {
   baseUrl: string;
   model: string;
-  maxOutputTokens: number;
   hasKey: boolean;
   adbPath: string;
   serial: string;

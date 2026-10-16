@@ -13,34 +13,38 @@ test('configuration rejects credential-bearing, remote plaintext, and injected f
   assert.throws(() => validateConfig({ ...valid, adbPath: 'relative/adb' }));
   assert.equal(validateConfig({ ...valid, baseUrl: 'http://127.0.0.1:8080/v1' }).baseUrl, 'http://127.0.0.1:8080/v1');
 });
-test('output budget defaults to 8192 and accepts only bounded safe integers', () => {
-  assert.equal(validateConfig(valid).maxOutputTokens, 8192);
-  for (const maxOutputTokens of [256, 4096, 32768]) {
-    assert.equal(validateConfig({ ...valid, maxOutputTokens }).maxOutputTokens, maxOutputTokens);
-  }
-  for (const maxOutputTokens of [null, '8192', 255, 32769, 8192.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
-    assert.throws(() => validateConfig({ ...valid, maxOutputTokens }), error => error.code === 'INVALID_OUTPUT_LIMIT');
+test('configuration discards output limits supplied by older clients', () => {
+  assert.equal('maxOutputTokens' in validateConfig(valid), false);
+  for (const maxOutputTokens of [256, 4096, 32768, null, '8192', 0]) {
+    assert.equal('maxOutputTokens' in validateConfig({ ...valid, maxOutputTokens }), false);
   }
 });
-test('output budget survives save and reload while legacy v1 settings use the default', async () => {
+test('legacy v1 output limits are ignored and removed on save without losing the key or device settings', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'tappilot-output-budget-'));
   const cipher = { encrypt: async value => Buffer.from([...value].reverse().join('')), decrypt: async value => [...value.toString()].reverse().join('') };
   try {
     const store = new SettingsStore(directory, cipher);
-    assert.equal((await store.load()).maxOutputTokens, 8192);
-    assert.equal((await store.save({ ...valid, maxOutputTokens: 4096 })).maxOutputTokens, 4096);
-    const restored = new SettingsStore(directory, cipher);
-    assert.equal((await restored.load()).maxOutputTokens, 4096);
-    assert.equal(restored.model().maxOutputTokens, 4096);
+    assert.equal('maxOutputTokens' in await store.load(), false);
+    await store.save(valid);
     const legacy = JSON.parse(await readFile(store.file, 'utf8'));
     assert.equal(legacy.version, 1);
-    assert.equal(legacy.maxOutputTokens, 4096);
-    delete legacy.maxOutputTokens;
+    assert.equal('maxOutputTokens' in legacy, false);
+    legacy.maxOutputTokens = 4096;
     await writeFile(store.file, JSON.stringify(legacy));
     const legacyStore = new SettingsStore(directory, cipher);
-    assert.equal((await legacyStore.load()).maxOutputTokens, 8192);
-    assert.equal(legacyStore.model().maxOutputTokens, 8192);
+    const loaded = await legacyStore.load();
+    assert.equal('maxOutputTokens' in loaded, false);
+    assert.equal(loaded.serial, valid.serial);
+    assert.equal(loaded.mode, 'usb');
+    assert.equal('maxOutputTokens' in legacyStore.model(), false);
     assert.equal(legacyStore.model().apiKey, valid.apiKey);
+    await legacyStore.save({ ...valid, apiKey: '' });
+    const saved = JSON.parse(await readFile(store.file, 'utf8'));
+    assert.equal('maxOutputTokens' in saved, false);
+    assert.equal(saved.encryptedKey, legacy.encryptedKey);
+    const restored = new SettingsStore(directory, cipher);
+    await restored.load();
+    assert.equal(restored.model().apiKey, valid.apiKey);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 test('secret is encrypted on disk, never returned, retained or explicitly cleared', async () => {

@@ -125,6 +125,11 @@ test("error projection retains only known action rejection reasons and drops arb
   for (const details of [{ reason: "Synthetic private text" }, { reason: { text: "Synthetic private text" } }, ["TARGET_HIDDEN"], null]) {
     assert.deepEqual(projectToolResult({ ok: false, error: { ...error, details } }), { ok: false, error });
   }
+  for (const reason of ["TREE_INCOMPLETE", "SESSION_CHANGED", "WINDOW_CHANGED", "TARGET_IDENTITY_CHANGED", "TARGET_AMBIGUOUS", "PAGE_CONTEXT_CHANGED", "TARGET_NOT_ACTIONABLE"]) {
+    const changed = { code: "TARGET_CHANGED", message: "Target cannot be verified", retryable: true };
+    assert.deepEqual(projectToolResult({ ok: false, error: { ...changed, details: { reason, label: "Synthetic private text", originalError: { message: "Synthetic private text" } } } }),
+      { ok: false, error: { ...changed, details: { reason } } });
+  }
 });
 
 test("synthetic large tree has substantially smaller model payload with every meaningful label retained", t => {

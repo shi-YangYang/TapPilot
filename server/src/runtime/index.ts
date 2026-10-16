@@ -112,7 +112,6 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
     if (!Number.isSafeInteger(maxTurns) || maxTurns < 1 || maxTurns > 40) throw new RuntimeError("INVALID_TURN_LIMIT", "模型轮次上限必须在 1 到 40 之间。");
     const validators = validateTools(options.tools);
     const conversation = new Conversation(SYSTEM, options.task);
-    let tokens = 0;
     let hasObservation = false;
     let latestObservation: Record<string, unknown> | undefined;
     let argumentRepairUsed = false;
@@ -236,12 +235,10 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
       const response = await completion(options.model, conversation.messages(), decisionTools, signal, options.modelFetch).finally(() => { metrics.modelMs += Math.round(performance.now() - modelStarted); });
       signal.throwIfAborted();
       const durationMs = Math.round(performance.now() - modelStarted);
-      tokens += response.tokens;
       metrics.modelRequestBytes = (metrics.modelRequestBytes ?? 0) + response.requestBytes;
       metrics.modelUiBytes = (metrics.modelUiBytes ?? 0) + response.modelUiBytes;
       metrics.rawUiBytes = (metrics.rawUiBytes ?? 0) + response.rawUiBytes;
       emit({ type: "model_end", turn, durationMs, requestBytes: response.requestBytes, responseBytes: response.responseBytes });
-      if (tokens > 120_000) throw new RuntimeError("TOKEN_BUDGET", "任务达到累计 token 预算，已停止本轮操作。");
       const calls = response.message.tool_calls ?? [];
       if (!calls.length) {
         if (awaitingArgumentRepair) throw new RuntimeError("INVALID_TOOL_ARGUMENTS", "模型未修正工具参数，先前整批操作均未执行，任务已停止。");
