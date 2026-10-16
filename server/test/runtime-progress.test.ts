@@ -122,10 +122,35 @@ test("progress guard preserves the accepted action outcome and supplies a later 
 test("progress guard bounds event-only waits even when event revisions and timeout arguments change", async () => {
   const waits = [1, 2, 3].map(id => ({ name: "wait_for_ui_change", args: { sinceRevision: id, timeoutMs: id * 100 } }));
   let dispatched = 0;
-  const { result } = await scenario(waits, async name => name === "get_ui_tree" ? observed(1) :
+  let reads = 0;
+  const { result } = await scenario(waits, async name => name === "get_ui_tree" ? observed(++reads) :
     { ok: true, result: { revision: ++dispatched, changed: true, timedOut: false, matched: false } });
   assert.equal(dispatched, 3);
+  assert.equal(reads, 4, "inspect the third post-wait screen before deciding that it repeated");
+  assert.equal(result.metrics.hostReads, 3);
+  assert.equal(result.metrics.modelRequests, 3);
   assert.match(result.error!, /REPEATED_ACTION.*wait_for_ui_change/);
+});
+
+test("a changed third post-wait screen clears event-wait repetition and allows the next decision", async () => {
+  const waits = [1, 2, 3].map(id => ({ name: "wait_for_ui_change", args: { sinceRevision: id, timeoutMs: id * 100 } }));
+  let dispatched = 0;
+  let reads = 0;
+  const { result, events } = await scenario(waits, async name => {
+    if (name === "get_ui_tree") return observed(++reads, reads === 4 ? "Synthetic loading completed" : undefined);
+    return { ok: true, result: { revision: ++dispatched, changed: true, timedOut: false, matched: false } };
+  }, (turn, body) => {
+    if (turn !== 3) return;
+    const latest = JSON.parse((body.messages as Json[]).at(-1)!.content as string);
+    assert.equal(latest.result.snapshotId, "s4");
+    assert.equal(latest.result.nodes[0].text, "Synthetic loading completed");
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(dispatched, 3);
+  assert.equal(reads, 4);
+  assert.equal(result.metrics.hostReads, 3);
+  assert.equal(result.metrics.modelRequests, 4);
+  assert.equal(events.find(event => event.type === "tool_end" && event.turn === 3 && event.toolName === "get_ui_tree")!.observationChanged, true);
 });
 
 test("progress guard diagnostics retain only allowlisted error codes and action names", async () => {
@@ -147,18 +172,22 @@ test("progress guard diagnostics retain only allowlisted error codes and action 
 
 test("progress guard reports failed observation diagnostics without replaying an accepted action", async () => {
   let actions = 0;
+  let reads = 0;
   const { result, events } = await scenario([click(1)], async name => {
-    if (name === "get_ui_tree") return observed(1);
+    if (name === "get_ui_tree") return ++reads === 1 ? observed(1) : { ok: false, error: { code: "NO_ACTIVE_WINDOW" } };
     actions++;
     return { ok: true, result: { action: { accepted: true }, observation: null, observationError: { code: "NO_ACTIVE_WINDOW", message: "private-observation-error" } } };
   }, (turn, body) => {
     if (turn !== 1) return;
-    const latest = JSON.parse((body.messages as Json[]).at(-1)!.content as string);
-    assert.equal(latest.ok, true);
-    assert.equal(latest.result.action.accepted, true);
-    assert.equal(latest.result.observationError.code, "NO_ACTIVE_WINDOW");
+    const history = (body.messages as Json[]).filter(message => message.role === "tool").map(message => JSON.parse(message.content as string));
+    const accepted = history.find(value => value.result?.action?.accepted);
+    assert.equal(accepted.ok, true);
+    assert.equal(accepted.result.observationError.code, "NO_ACTIVE_WINDOW");
+    assert.equal(history.at(-1).error.code, "NO_ACTIVE_WINDOW");
   });
   assert.equal(actions, 1);
+  assert.equal(reads, 2);
+  assert.equal(result.metrics.hostReads, 1);
   assert.match(result.error!, /NO_OBSERVATION/);
   const ending = events.find(event => event.type === "tool_end" && event.turn === 1)!;
   assert.equal(ending.ok, false);

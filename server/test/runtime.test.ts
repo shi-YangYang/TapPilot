@@ -245,6 +245,7 @@ test("response, tool result and turn budgets stop the run rather than retrying",
 
 test("an action without a fresh observation invalidates earlier UI evidence and cannot finish as completed", async () => {
   let turn = 0;
+  let reads = 0;
   const server = await fixture((body, res) => {
     turn++;
     if (turn === 2) assert.equal(JSON.stringify(body.messages).includes("old-screen-marker"), false);
@@ -252,9 +253,12 @@ test("an action without a fresh observation invalidates earlier UI evidence and 
   });
   try {
     const result = await runAgent({ task: "navigate", model: server.model, tools, execute: async name => name === "get_ui_tree" ?
-      observation("s1", "old-screen-marker") : { ok: true, result: { action: { accepted: true }, observationError: { code: "NO_ACTIVE_WINDOW" } } } });
+      ++reads === 1 ? observation("s1", "old-screen-marker") : { ok: false, error: { code: "NO_ACTIVE_WINDOW" } } :
+      { ok: true, result: { action: { accepted: true }, observationError: { code: "NO_ACTIVE_WINDOW" } } } });
     assert.equal(result.status, "failed");
     assert.match(result.error!, /NO_OBSERVATION/);
-    assert.equal(result.metrics.toolCalls, 2);
+    assert.equal(reads, 2, "only one host recovery read follows the accepted action");
+    assert.equal(result.metrics.hostReads, 1);
+    assert.equal(result.metrics.toolCalls, 3);
   } finally { await server.close(); }
 });
