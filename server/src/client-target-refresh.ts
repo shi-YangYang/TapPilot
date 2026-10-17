@@ -4,12 +4,20 @@ type Json = Record<string, unknown>;
 export type NodeAction = "tap_element" | "click_element" | "input_text" | "scroll";
 type Tree = { snapshot: Json; nodes: Json[]; byId: Map<string, Json>; children: Map<string, Json[]> };
 export type TargetRefresh = { tree: Tree; action: NodeAction; signature: string; own: string; context: string; nodeId: string };
+/** Structural diagnostics only: never persist labels, IDs, positions or their hashes. */
+export type ContextChangeEvidence = {
+  region: "target" | "ancestor" | "target_descendant" | "peer_item" | "outside_target" | "mixed" | "unknown";
+  kind: "content" | "state" | "structure" | "geometry" | "mixed" | "unknown";
+  changedNodes: number;
+  targetMatched: boolean;
+  actionTargetMatched: boolean;
+};
 const semanticStrings = { text: 1000, contentDescription: 1000, resourceId: 512, className: 512 };
 const collectionClasses = new Set(["androidx.recyclerview.widget.RecyclerView", "android.support.v7.widget.RecyclerView", "android.widget.ListView", "android.widget.GridView"]);
 type ChangeReason = "TREE_INCOMPLETE" | "SESSION_CHANGED" | "WINDOW_CHANGED" | "TARGET_IDENTITY_CHANGED" | "TARGET_AMBIGUOUS" | "PAGE_CONTEXT_CHANGED";
 
-function changed(reason: ChangeReason): AgentError {
-  return new AgentError("TARGET_CHANGED", "The intended control cannot be uniquely verified in the refreshed UI. No action was sent; choose a target from the returned observation.", true, { reason });
+function changed(reason: ChangeReason, contextChange?: ContextChangeEvidence): AgentError {
+  return new AgentError("TARGET_CHANGED", "The intended control cannot be uniquely verified in the refreshed UI. No action was sent; choose a target from the returned observation.", true, { reason, ...(contextChange ? { contextChange } : {}) });
 }
 
 /** Parse only complete native trees; never infer missing ancestors from a find result. */
@@ -149,26 +157,35 @@ function independentItemContext(tree: Tree, item: Json): string | undefined {
   return context ? JSON.stringify(context) : undefined;
 }
 
+function actualClickTarget(tree: Tree, target: Json): Json | undefined {
+  let actual = target;
+  for (let depth = 0; depth <= 8; depth++) {
+    if (["editable", "checkable", "scrollable", "password"].some((key) => actual[key] === true)) return;
+    if (actual.clickable === true) return actual;
+    const parent = tree.byId.get(String(actual.parentId));
+    if (!parent) return;
+    actual = parent;
+  }
+}
+
+function descendsFrom(tree: Tree, node: Json, ancestor: Json): boolean {
+  let current: Json | undefined = node;
+  while (current) {
+    if (current === ancestor) return true;
+    current = tree.byId.get(String(current.parentId));
+  }
+  return false;
+}
+
 /** A narrow collection-item click exception, never a general form/field context heuristic. */
 function sameContextWithIndependentItems(previous: Tree, fresh: Tree, selected: Json, refreshed: Json, action: NodeAction): boolean {
   if (action !== "tap_element" && action !== "click_element") return false;
   const before = listItem(previous, selected), after = listItem(fresh, refreshed);
   if (!before || !after || !collectionClasses.has(String(before.list.className)) || !collectionClasses.has(String(after.list.className))) return false;
-  const clicksWholeItem = (tree: Tree, target: Json, item: Json): boolean => {
-    let actual = target;
-    for (let depth = 0; depth <= 8; depth++) {
-      if (["editable", "checkable", "scrollable", "password"].some((key) => actual[key] === true)) return false;
-      if (actual.clickable === true) return actual === item;
-      const parent = tree.byId.get(String(actual.parentId));
-      if (!parent) return false;
-      actual = parent;
-    }
-    return false;
-  };
   // Rebinding an embedded input or button could apply to a changed recipient or
   // form context elsewhere. Only a click whose actual destination is the entire
   // identified collection item may use this exception.
-  if (!clicksWholeItem(previous, selected, before.item) || !clicksWholeItem(fresh, refreshed, after.item)) return false;
+  if (actualClickTarget(previous, selected) !== before.item || actualClickTarget(fresh, refreshed) !== after.item) return false;
   const oldItems = previous.children.get(String(before.list.nodeId)) ?? [];
   const newItems = fresh.children.get(String(after.list.nodeId)) ?? [];
   if (oldItems.length < 2 || oldItems.length !== newItems.length) return false;
@@ -182,6 +199,9 @@ function sameContextWithIndependentItems(previous: Tree, fresh: Tree, selected: 
   if (!oldTarget || !newTarget || !independentItemContext(previous, before.item) || !independentItemContext(fresh, after.item)) return false;
   const overlaps = (a: Rect, b: Rect) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
   const oldContexts = new Map<string, string>(), newContexts = new Map<string, string>();
+  // This exception is confined to sibling items in the target's own collection.
+  // Another collection may carry the current account/recipient even when its
+  // identity and bounds are stable; native grouping cannot prove independence.
   for (let index = 0; index < oldItems.length; index++) {
     if (index === targetIndex) continue;
     const oldItem = oldItems[index]!, newItem = newItems[index]!;
@@ -193,6 +213,51 @@ function sameContextWithIndependentItems(previous: Tree, fresh: Tree, selected: 
     newContexts.set(String(newItem.nodeId), newContext!);
   }
   return oldContexts.size > 0 && pageContext(previous, oldContexts) === pageContext(fresh, newContexts);
+}
+
+function contextChangeEvidence(previous: Tree, fresh: Tree, selected: Json, refreshed: Json): ContextChangeEvidence {
+  const result: ContextChangeEvidence = { region: "unknown", kind: "unknown", changedNodes: 0, targetMatched: true, actionTargetMatched: true };
+  const oldRoot = previous.nodes.find((node) => node.parentId === null)!;
+  const newRoot = fresh.nodes.find((node) => node.parentId === null)!;
+  const pairs: [Json, Json][] = [];
+  function align(old: Json, current: Json): boolean {
+    // Positional comparison is evidence only when the native structure/roles
+    // agree. An inserted/replaced branch cannot honestly identify which text
+    // changed, and a resource ID is never itself retained in this diagnostic.
+    const oldChildren = previous.children.get(String(old.nodeId)) ?? [];
+    const newChildren = fresh.children.get(String(current.nodeId)) ?? [];
+    if (old.className !== current.className || old.resourceId !== current.resourceId || oldChildren.length !== newChildren.length) return false;
+    pairs.push([old, current]);
+    return oldChildren.every((child, index) => align(child, newChildren[index]!));
+  }
+  if (!align(oldRoot, newRoot) || !pairs.some(([old, current]) => old === selected && current === refreshed)) {
+    return { ...result, kind: "structure" };
+  }
+  const actual = actualClickTarget(previous, selected) ?? selected;
+  const targetItem = listItem(previous, selected);
+  const regions = new Set<ContextChangeEvidence["region"]>();
+  const kinds = new Set<ContextChangeEvidence["kind"]>();
+  for (const [old, current] of pairs) {
+    const nodeKinds = new Set<ContextChangeEvidence["kind"]>();
+    if (old.text !== current.text || old.contentDescription !== current.contentDescription) nodeKinds.add("content");
+    for (const key of ["clickable", "scrollable", "editable", "enabled", "password", "checkable", "checked", "selected", "focused", "visible"]) {
+      if (old[key] !== current[key]) nodeKinds.add("state");
+    }
+    if (JSON.stringify(old.bounds) !== JSON.stringify(current.bounds)) nodeKinds.add("geometry");
+    if (!nodeKinds.size) continue;
+    result.changedNodes++;
+    for (const kind of nodeKinds) kinds.add(kind);
+    if (old === selected) regions.add("target");
+    else if (descendsFrom(previous, selected, old)) regions.add("ancestor");
+    else if (descendsFrom(previous, old, actual)) regions.add("target_descendant");
+    else {
+      const item = listItem(previous, old);
+      regions.add(targetItem && item?.list === targetItem.list && item.item !== targetItem.item ? "peer_item" : "outside_target");
+    }
+  }
+  result.region = regions.size > 1 ? "mixed" : regions.values().next().value ?? "unknown";
+  result.kind = kinds.size > 1 ? "mixed" : kinds.values().next().value ?? "unknown";
+  return result;
 }
 
 function targetSignature(tree: Tree, requested: Json, action: NodeAction): string | undefined {
@@ -250,7 +315,7 @@ export function prepareTargetRefresh(value: unknown, target: Json, action: NodeA
   return { tree, action, own, signature, context, nodeId: String(selected.nodeId) };
 }
 
-export function rebindRefreshedTarget(reference: TargetRefresh, value: unknown, original: Json): Json {
+export function rebindRefreshedTarget(reference: TargetRefresh, value: unknown, original: Json, onContextChange?: (evidence: ContextChangeEvidence) => void): Json {
   const fresh = fullTree(value);
   if (!fresh) throw changed("TREE_INCOMPLETE");
   const previous = reference.tree.snapshot;
@@ -262,8 +327,11 @@ export function rebindRefreshedTarget(reference: TargetRefresh, value: unknown, 
   const candidates = fresh.nodes.filter((node) => ownSemantic(node) === reference.own && targetSignature(fresh, node, reference.action) === reference.signature);
   if (!candidates.length) throw changed("TARGET_IDENTITY_CHANGED");
   if (candidates.length !== 1) throw changed("TARGET_AMBIGUOUS");
-  if (context !== reference.context && !sameContextWithIndependentItems(reference.tree, fresh, reference.tree.byId.get(reference.nodeId)!, candidates[0]!, reference.action)) {
-    throw changed("PAGE_CONTEXT_CHANGED");
+  if (context !== reference.context) {
+    const selected = reference.tree.byId.get(reference.nodeId)!, refreshed = candidates[0]!;
+    const evidence = contextChangeEvidence(reference.tree, fresh, selected, refreshed);
+    onContextChange?.(evidence);
+    if (!sameContextWithIndependentItems(reference.tree, fresh, selected, refreshed, reference.action)) throw changed("PAGE_CONTEXT_CHANGED", evidence);
   }
   return { ...original, snapshotId: fresh.snapshot.snapshotId, nodeId: candidates[0]!.nodeId };
 }

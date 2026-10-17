@@ -114,7 +114,10 @@ internal class WirelessConnection(private val pairing: PairingInfo, private val 
         if (!live.get() || !ready.get()) return
         val reply = JSONObject().put("id", id).put("ok", error == null).put("meta", JSONObject().put("durationMs", now() - startedAt))
         if (error == null) reply.put("result", result ?: JSONObject.NULL)
-        else reply.put("error", error.toJson())
+        else {
+            reply.put("error", error.toJson())
+            error.nativeObservation?.let { reply.put("observation", it) }
+        }
         val encoded = reply.toString()
         if (encoded.toByteArray().size > 4 * 1024 * 1024 || (socket?.queueSize() ?: 0) > 4 * 1024 * 1024 || socket?.send(encoded) != true)
             finish("无线发送失败或队列超过限制，连接已关闭")

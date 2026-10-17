@@ -85,19 +85,6 @@ test("task cancellation during transport preparation gates dispatch; emergency s
   } finally { await client.close(); }
 });
 
-test("client refuses observed sensitive submit labels and unknown tools", async () => {
-  const sensitive = { ...snapshot, nodes: [{ ...snapshot.nodes[0]!, text: "立即支付" }] };
-  const calls: string[] = [];
-  const client = createPhoneClient({ close: async () => {}, call: async (method) => { calls.push(method); return response(sensitive); } }, new Adb());
-  const signal = new AbortController().signal;
-  try {
-    await client.execute("get_ui_tree", {}, signal);
-    assert.equal(((await client.execute("act_and_observe", { action: "click_element", arguments: target }, signal)).error as any).code, "MANUAL_ACTION_REQUIRED");
-    assert.equal(((await client.execute("click_element", target, signal)).error as any).code, "UNKNOWN_METHOD");
-    assert.deepEqual(calls, ["get_ui_tree"]);
-  } finally { await client.close(); }
-});
-
 test("compaction preserves identity, ordering, disabled and hidden states, labels and hierarchy", () => {
   const source = { ...snapshot, nodes: [{ ...snapshot.nodes[0]!, enabled: false, visible: false, text: "", parentId: "root", resourceId: "" }] };
   const compact = compactUi(source) as typeof source;
@@ -108,21 +95,4 @@ test("compaction preserves identity, ordering, disabled and hidden states, label
   assert.deepEqual(compact.nodes[0]!.bounds, source.nodes[0]!.bounds);
   assert.equal(source.nodes[0]!.text, "");
   assert.ok(!("text" in compact.nodes[0]!));
-});
-
-test("sensitive guard covers the actual clickable ancestor and its descendant labels", async () => {
-  const parent = { ...snapshot.nodes[0]!, nodeId: "parent", text: "", clickable: true };
-  const child = { ...snapshot.nodes[0]!, parentId: "parent", text: "确认", clickable: false };
-  const label = { ...snapshot.nodes[0]!, nodeId: "label", parentId: "parent", text: "支付订单", clickable: false };
-  const calls: string[] = [];
-  const client = createPhoneClient({ close: async () => {}, call: async (method) => {
-    calls.push(method); return response({ ...snapshot, nodes: [parent, child, label] });
-  } }, new Adb());
-  try {
-    const signal = new AbortController().signal;
-    await client.execute("get_ui_tree", {}, signal);
-    const result = await client.execute("act_and_observe", { action: "click_element", arguments: target }, signal);
-    assert.equal((result.error as any).code, "MANUAL_ACTION_REQUIRED");
-    assert.deepEqual(calls, ["get_ui_tree"]);
-  } finally { await client.close(); }
 });

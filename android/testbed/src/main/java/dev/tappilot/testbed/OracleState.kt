@@ -12,7 +12,7 @@ import java.io.File
 
 /** Business state comes from handlers, never from accessibility labels or the agent's answer. */
 object OracleState {
-    val scenes = setOf("navigation", "search", "async_list", "ime", "overlay", "long_list", "webview", "canvas")
+    val scenes = setOf("navigation", "search", "async_list", "ime", "overlay", "long_list", "webview", "canvas") + NativeExecutorScenes.names
     private var state = JSONObject()
     private var directory: File? = null
 
@@ -20,9 +20,12 @@ object OracleState {
         require(scene in scenes)
         directory = context.filesDir
         state = JSONObject().put("schemaVersion", 1).put("scene", scene).put("seed", seed).put("runId", runId)
+            .put("variantId", "legacy").put("configurationError", false)
             .put("page", "initial").put("lastTarget", "none").put("receivedInput", "none")
             .put("inputField", "none").put("focus", "none").put("recipient", "synthetic_a")
-            .put("wrongClicks", 0).put("revision", 0).put("refreshCount", 0)
+            .put("wrongClicks", 0).put("clickCount", 0).put("revision", 0).put("refreshCount", 0)
+            .put("orderChangeCount", 0).put("replacementCount", 0).put("peerTextChangeCount", 0)
+            .put("armed", false).put("changed", false)
             .put("overlayDismissed", false).put("completed", false)
         persist()
     }
@@ -35,6 +38,7 @@ object OracleState {
 
     @Synchronized fun click(target: String, correct: Boolean = true) {
         state.put("lastTarget", target)
+        state.put("clickCount", state.optInt("clickCount") + 1)
         if (!correct) state.put("wrongClicks", state.optInt("wrongClicks") + 1)
         state.put("revision", state.optInt("revision") + 1)
         persist()

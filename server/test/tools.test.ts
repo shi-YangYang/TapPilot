@@ -66,6 +66,7 @@ class UnusedApprovalQueue extends ApprovalQueue {
 }
 
 const guardedActions: Array<{ method: ToolName; args: Record<string, unknown> }> = [
+  { method: "tap_element", args: { snapshotId: snapshot.snapshotId, nodeId: "n0" } },
   { method: "click_element", args: { snapshotId: snapshot.snapshotId, nodeId: "n0" } },
   { method: "input_text", args: { snapshotId: snapshot.snapshotId, nodeId: "n0", text: "测试输入" } },
   { method: "swipe", args: { snapshotId: snapshot.snapshotId, startX: 100, startY: 300, endX: 100, endY: 100 } },
@@ -312,7 +313,7 @@ test("emergency stop bypasses a pending mutation and remains latched when phone 
   } };
   const controller = new ToolController(bridge, new Adb(), new ApprovalQueue());
   try {
-    const action = controller.invoke("scroll", { snapshotId: "s", nodeId: "n", direction: "forward" });
+    const action = controller.invoke("open_settings", {});
     assert.equal(body(await controller.invoke("press_key", { key: "home" })).error.code, "ACTION_IN_PROGRESS");
     const stop = body(await controller.invoke("emergency_stop", {}));
     assert.equal(stop.error.code, "PHONE_STOP_UNCONFIRMED");

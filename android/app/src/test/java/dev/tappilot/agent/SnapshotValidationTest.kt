@@ -107,4 +107,26 @@ class SnapshotValidationTest {
         assertFalse(AgentError("OTHER_ERROR", "Synthetic failure", false, SnapshotStaleReason.NODE_CONTENT_CHANGED.name).toJson().has("details"))
         assertFalse(AgentError("STALE_SNAPSHOT", "Legacy failure", true).toJson().has("details"))
     }
+    @Test fun unavailableChildrenGetOnlyOneFreshReadButCapacityTruncationDoesNot() {
+        data class Read(val missingChild: Boolean, val truncated: Boolean, val capacityTruncated: Boolean = false)
+        val reads = mutableListOf<Boolean>()
+        val stillIncomplete = captureWithMissingChildRecovery({ refresh ->
+            reads.add(refresh); Read(missingChild = true, truncated = true)
+        }, { it.missingChild && !it.capacityTruncated })
+        assertEquals(listOf(false, true), reads)
+        assertTrue(stillIncomplete.truncated)
+        reads.clear()
+        val capacityTruncation = captureWithMissingChildRecovery({ refresh ->
+            reads.add(refresh); Read(missingChild = true, truncated = true, capacityTruncated = true)
+        }, { it.missingChild && !it.capacityTruncated })
+        assertEquals(listOf(false), reads)
+        assertTrue(capacityTruncation.truncated)
+        reads.clear()
+        val recovered = captureWithMissingChildRecovery({ refresh ->
+            reads.add(refresh); Read(missingChild = !refresh, truncated = !refresh)
+        }, { it.missingChild && !it.capacityTruncated })
+        assertEquals(listOf(false, true), reads)
+        assertFalse(recovered.truncated)
+    }
+
 }

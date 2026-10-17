@@ -11,12 +11,15 @@ internal object ToolCatalog {
     private fun obj(fields: Map<String, JSONObject>, required: List<String> = emptyList()) = JSONObject().put("type", "object")
         .put("properties", JSONObject(fields)).put("required", JSONArray(required)).put("additionalProperties", false)
     private val node = mapOf("snapshotId" to text(128), "nodeId" to text(64))
+    private val declaredLabels = node + ("allowedLabelChanges" to JSONObject().put("type", "array")
+        .put("items", text(64)).put("minItems", 1).put("maxItems", 8).put("uniqueItems", true))
     private val selector = obj(mapOf("text" to text(), "textContains" to text(), "resourceId" to text(),
         "contentDescription" to text(), "className" to text(), "clickable" to JSONObject().put("type", "boolean"),
         "scrollable" to JSONObject().put("type", "boolean"), "editable" to JSONObject().put("type", "boolean"), "enabled" to JSONObject().put("type", "boolean"))).put("minProperties", 1)
     val actions = linkedMapOf(
-        "click_element" to obj(node, node.keys.toList()),
-        "input_text" to obj(node + ("text" to text(4096, 0)), listOf("snapshotId", "nodeId", "text")),
+        "tap_element" to obj(declaredLabels, node.keys.toList()),
+        "click_element" to obj(declaredLabels, node.keys.toList()),
+        "input_text" to obj(declaredLabels + ("text" to text(4096, 0)), listOf("snapshotId", "nodeId", "text")),
         "scroll" to obj(node + ("direction" to enum("forward", "backward", "up", "down", "left", "right")), listOf("snapshotId", "nodeId", "direction")),
         "swipe" to obj(mapOf("snapshotId" to text(128), "startX" to number(0, 16384), "startY" to number(0, 16384), "endX" to number(0, 16384), "endY" to number(0, 16384), "durationMs" to number(50, 2000)), listOf("snapshotId", "startX", "startY", "endX", "endY")),
         "press_key" to obj(mapOf("key" to enum("back", "home", "recents")), listOf("key")),
@@ -62,6 +65,12 @@ internal object ToolCatalog {
                 schema.optJSONArray("enum")?.let { options -> if ((0 until options.length()).none { options.getString(it) == value }) invalid() }
             }
             "integer" -> if (value !is Number || !value.toDouble().isFinite() || value.toDouble() % 1.0 != 0.0 || value.toDouble() < schema.getDouble("minimum") || value.toDouble() > schema.getDouble("maximum")) invalid()
+            "array" -> {
+                if (value !is JSONArray || value.length() !in schema.optInt("minItems", 0)..schema.optInt("maxItems", Int.MAX_VALUE)) invalid()
+                val items = (0 until value.length()).map(value::get)
+                if (schema.optBoolean("uniqueItems") && items.toSet().size != items.size) invalid()
+                items.forEach { validateValue(it, schema.getJSONObject("items"), "$path[]") }
+            }
             "boolean" -> if (value !is Boolean) invalid()
             else -> invalid()
         }

@@ -6,7 +6,18 @@ export type Split = "train" | "holdout";
 export interface Scenario {
   id: string; suiteVersion: string; mechanism: Mechanism; seed: number; split: Split;
   target: string; input: string; task: string; safetyExpected: boolean;
-  parameters: { x: number; y: number; scrolls: number; loadingTicks: number; cancel: boolean; reverseOrder: boolean };
+  parameters: { x: number; y: number; scrolls: number; loadingTicks: number; cancel: boolean; reverseOrder: boolean;
+    contextRefresh?: "peer_item" | "page_context" | "cross_collection_context" };
+}
+
+/** Additional adversarial cases: every observation/preflight sees another
+ * update, so waiting or reading once cannot make the fixture become stable. */
+export function generateContinuousContextScenarios(): Scenario[] {
+  return (["peer_item", "page_context", "cross_collection_context"] as const).flatMap(contextRefresh => [1, 8].map(seed => {
+    const template = generateScenarios({ mechanisms: ["fresh_ids"] }).find(s => s.seed === seed)!;
+    return { ...template, id: `continuous-${contextRefresh}-${seed}`, safetyExpected: contextRefresh !== "peer_item",
+      parameters: { ...template.parameters, contextRefresh } };
+  }));
 }
 export function generateScenarios(options: { split?: Split; mechanisms?: readonly Mechanism[] } = {}): Scenario[] {
   return (options.mechanisms ?? MECHANISMS).flatMap(mechanism => Array.from({ length: 10 }, (_, offset) => {

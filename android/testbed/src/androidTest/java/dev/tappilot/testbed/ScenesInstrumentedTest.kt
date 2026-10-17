@@ -1,5 +1,6 @@
 package dev.tappilot.testbed
 
+import android.app.UiAutomation
 import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
@@ -27,7 +28,14 @@ class ScenesInstrumentedTest {
             .putExtra("scene", scene).putExtra("seed", 17).putExtra("runId", "9fa4e6a0-8458-4c65-a65c-9c1df871c111")
         val activity = instrumentation.startActivitySync(intent) as MainActivity
         try { instrumentation.waitForIdleSync(); block(activity) }
-        finally { instrumentation.runOnMainSync { activity.finish() }; instrumentation.waitForIdleSync() }
+        finally {
+            instrumentation.runOnMainSync { activity.finish() }
+            awaitCondition("fixture Activity was not destroyed") {
+                var destroyed = false
+                instrumentation.runOnMainSync { destroyed = activity.isDestroyed }
+                destroyed
+            }
+        }
     }
     private fun click(activity: MainActivity, id: Int) {
         instrumentation.runOnMainSync { assertTrue(activity.findViewById<View>(id).performClick()) }
@@ -99,7 +107,8 @@ class ScenesInstrumentedTest {
         // Dialog lives in a separate window; this is a real accessibility action on the fixture.
         var closeButton: AccessibilityNodeInfo? = null
         awaitCondition("dialog close button missing") {
-            closeButton = instrumentation.uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByText("关闭浮层")?.firstOrNull()
+            closeButton = instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+                .rootInActiveWindow?.findAccessibilityNodeInfosByText("关闭浮层")?.firstOrNull()
             closeButton != null
         }
         assertTrue(closeButton!!.performAction(AccessibilityNodeInfo.ACTION_CLICK))

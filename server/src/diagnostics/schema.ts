@@ -9,11 +9,11 @@ const errorCodes = [
   "CANCELLED", "CLIENT_CLOSED", "COMMAND_TIMEOUT", "CONFIRMATION_REQUIRED", "CONTEXT_LIMIT", "DEVICE_DISCONNECTED", "DEVICE_LOCKED",
   "DEVICE_SELECTION_REQUIRED", "DEVICE_TRANSPORT_DENIED", "DEVICE_UNAVAILABLE", "EMERGENCY_STOPPED", "GESTURE_CANCELLED",
   "GESTURE_COMPLETION_TIMEOUT", "INTERNAL_ERROR", "INVALID_ARGUMENT", "INVALID_MODEL_CONFIG", "INVALID_MODEL_URL", "INVALID_REQUEST",
-  "INVALID_TASK", "INVALID_THREAD", "INVALID_TOOLS", "INVALID_TOOL_ARGUMENTS", "INVALID_TURN_LIMIT", "MANUAL_ACTION_REQUIRED",
+  "INVALID_TASK", "INVALID_THREAD", "INVALID_TOOLS", "INVALID_TOOL_ARGUMENTS", "INVALID_TURN_LIMIT", "MANUAL_ACTION_REQUIRED", "EXECUTOR_UPGRADE_REQUIRED",
   "MODEL_CONNECTION_FAILED", "MODEL_EMPTY_RESPONSE", "MODEL_HTTP_ERROR", "MODEL_INVALID_RESPONSE", "MODEL_INVALID_TOOL_CALL",
   "MODEL_OUTPUT_LIMIT", "MODEL_RESPONSE_LIMIT", "MODEL_TIMEOUT", "NODE_DISABLED", "NODE_NOT_ACTIONABLE", "NODE_NOT_FOUND",
   "NODE_NOT_VISIBLE", "NOT_CLICKABLE", "NOT_EDITABLE", "NOT_IMPLEMENTED", "NOT_SCROLLABLE", "NO_ACTIVE_WINDOW", "NO_DEVICE", "NO_OBSERVATION",
-  "NO_KNOWN_SNAPSHOT", "PASSWORD_FIELD_BLOCKED", "PROTECTED_APP", "READ_REQUIRED", "REPEATED_ACTION", "REQUEST_TIMEOUT",
+  "NO_KNOWN_SNAPSHOT", "PASSWORD_FIELD_BLOCKED", "PAGE_CONTEXT_UNSTABLE", "PROTECTED_APP", "READ_REQUIRED", "REPEATED_ACTION", "REQUEST_TIMEOUT",
   "REQUEST_TOO_LARGE", "RESPONSE_TOO_LARGE", "RUNTIME_FAILED", "SENSITIVE_FIELD", "SERVICE_UNAVAILABLE", "SHUTTING_DOWN",
   "STALE_SNAPSHOT", "TARGET_CHANGED", "TASK_TIMEOUT", "TOOL_FAILED", "TOOL_INVALID_RESPONSE", "TOOL_RESULT_LIMIT", "TOOL_TIMEOUT",
   "TRUNCATED_SNAPSHOT", "TURN_LIMIT", "UNKNOWN_METHOD", "UNKNOWN_TOOL", "UNOBSERVED_ACTION_BATCH", "WIRELESS_CLOSED",
@@ -24,7 +24,7 @@ const reasons = [
   "NO_CLICKABLE_TARGET", "HIDDEN_ANCESTOR", "INVALID_BOUNDS", "TARGET_CLIPPED", "AMBIGUOUS_TOUCH_TARGET", "TOUCH_TARGET_MISMATCH",
   "TREE_INCOMPLETE", "SESSION_CHANGED", "WINDOW_CHANGED", "TARGET_IDENTITY_CHANGED", "TARGET_AMBIGUOUS", "PAGE_CONTEXT_CHANGED",
   "TARGET_NOT_ACTIONABLE", "SNAPSHOT_MISSING", "TREE_STRUCTURE_CHANGED", "NODE_CONTENT_CHANGED", "NODE_BOUNDS_CHANGED",
-  "NODE_STATE_CHANGED", "NODE_UNAVAILABLE",
+  "NODE_STATE_CHANGED", "NODE_UNAVAILABLE", "WINDOW_OBSCURED",
 ] as const;
 export const ActionKindSchema = z.enum([
   "none", "unknown", "get_device_info", "get_current_app", "get_ui_tree", "find_element", "wait_for_ui_change", "take_screenshot",
@@ -35,6 +35,19 @@ export const DiagnosticReasonSchema = z.enum(reasons);
 const count = z.number().int().min(0).max(1_000_000);
 const duration = z.number().finite().min(0).max(86_400_000);
 const version = z.union([z.literal("unknown"), z.string().regex(/^\d{1,4}\.\d{1,4}\.\d{1,4}$/)]);
+
+/** Location is structural, never a guess about the meaning of private UI text. */
+export const ContextChangeSchema = z.object({
+  region: z.enum(["target", "ancestor", "target_descendant", "peer_item", "outside_target", "mixed", "unknown"]),
+  kind: z.enum(["content", "state", "structure", "geometry", "mixed", "unknown"]),
+  changedNodes: z.number().int().min(0).max(500),
+  targetMatched: z.boolean(), actionTargetMatched: z.boolean(),
+}).strict();
+export type ContextChange = z.infer<typeof ContextChangeSchema>;
+export function safeContextChange(value: unknown): ContextChange | undefined {
+  const parsed = ContextChangeSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
 
 /** Every object is strict: extra fields reject the whole event, never strip a
  * task/answer/UI field and pretend its producer obeyed the privacy contract. */
@@ -55,6 +68,8 @@ export const DiagnosticEventSchema = z.object({
   effectState: z.enum(["changed", "unchanged", "unknown", "not_applicable"]),
   errorCode: DiagnosticErrorCodeSchema,
   reason: DiagnosticReasonSchema,
+  contextChange: ContextChangeSchema.optional(),
+  contextConflictCount: z.number().int().min(1).max(2).optional(),
   timings: z.object({
     totalMs: duration.optional(), modelMs: duration.optional(), toolMs: duration.optional(),
     preflightMs: duration.optional(), phoneMs: duration.optional(), observationMs: duration.optional(), snapshotAgeMs: duration.optional(),

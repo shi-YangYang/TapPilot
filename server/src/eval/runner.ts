@@ -1,5 +1,7 @@
 import { Adb } from "../adb.js";
-import type { DiagnosticEvent } from "../diagnostics/schema.js";
+import { safeDiagnosticErrorCode, type DiagnosticEvent } from "../diagnostics/schema.js";
+import type { SkillSpec } from "../skills/schema.js";
+import type { TraceStep, FailureEpisode } from "../skills/trace.js";
 import type { FrozenSnapshot } from "../learning/schema.js";
 import { createPhoneClient } from "../client-tools.js";
 import { runAgent, type ModelConfig, type ModelFetch } from "../runtime/index.js";
@@ -8,7 +10,7 @@ import { ScenarioPhone, type Json } from "./synthetic-phone.js";
 import { SUITE_VERSION, type Scenario } from "./scenarios.js";
 export interface Decision { name: string; arguments: Json }
 export type FixturePolicy = (observation: Json | undefined, body: Json, scenario: Scenario) => Decision | undefined;
-export interface EvaluationOptions { model?: ModelConfig; modelFetch?: ModelFetch; fixturePolicy?: FixturePolicy; signal?: AbortSignal; learningSnapshot?: FrozenSnapshot; onDiagnostic?: (event: DiagnosticEvent) => void; modelFetchDecorator?: (base: ModelFetch) => ModelFetch }
+export interface EvaluationOptions { model?: ModelConfig; modelFetch?: ModelFetch; fixturePolicy?: FixturePolicy; signal?: AbortSignal; learningSnapshot?: FrozenSnapshot; onDiagnostic?: (event: DiagnosticEvent) => void; modelFetchDecorator?: (base: ModelFetch) => ModelFetch; skillSnapshot?: readonly SkillSpec[]; onSkillTrace?: (step: TraceStep) => void; onSkillUsed?: (hashes: readonly string[]) => void; diagnosticVersion?: string; onFailureEpisode?: (episode: FailureEpisode) => void; phoneFactory?: (scenario: Scenario) => ScenarioPhone }
 export function currentObservation(body: Json): Json | undefined {
   let latest: Json | undefined;
   const visit = (value: unknown) => {
@@ -42,7 +44,7 @@ export const observedPolicy: FixturePolicy = (tree, body, scenario) => {
   if (nodes.some(n => n.text === "正在加载")) return { name: "wait_for_ui_change", arguments: { sinceRevision: tree.revision, timeoutMs: 1000, selector: { text: scenario.target } } };
 };
 export async function runScenario(scenario: Scenario, options: EvaluationOptions = {}): Promise<EvaluationResult> {
-  const phone = new ScenarioPhone(scenario);
+  const phone = options.phoneFactory?.(scenario) ?? new ScenarioPhone(scenario);
   const client = createPhoneClient(phone, new Adb());
   const cancelled = new AbortController();
   const errors: string[] = [];
@@ -63,9 +65,14 @@ export async function runScenario(scenario: Scenario, options: EvaluationOptions
     const result = await runAgent({ task: scenario.task, tools: client.tools,
       model: options.model ?? { baseUrl: "https://eval.invalid/v1", apiKey: "fixture", model: "observed-policy" }, modelFetch: fetch,
       signal: AbortSignal.any([cancelled.signal, ...(options.signal ? [options.signal] : [])]), maxTurns: 16,
-      learningSnapshot: options.learningSnapshot, onDiagnostic: options.onDiagnostic,
+      learningSnapshot: options.learningSnapshot, onDiagnostic: options.onDiagnostic, diagnosticVersion: options.diagnosticVersion,
+      skillSnapshot: options.skillSnapshot, onSkillTrace: options.onSkillTrace, onSkillUsed: options.onSkillUsed, onFailureEpisode: options.onFailureEpisode,
       execute: (name, args, signal) => client.execute(name, args, signal),
       onEvent: event => { if (typeof event.errorCode === "string") errors.push(event.errorCode); } });
+    if (result.error) {
+      const terminal = safeDiagnosticErrorCode(result.error.split(":", 1)[0]);
+      if (terminal !== "UNKNOWN") errors.push(terminal);
+    }
     return resultFor(scenario, phone.state, result, errors);
   } finally { await client.close(); }
 }

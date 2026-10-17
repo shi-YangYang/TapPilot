@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import type { ClientEvent, ConfigInput, ConnectionInput, ConnectionMode, LanAddress, Metrics, PageName, PairingResult, PublicConfig, Reply, UsbDevice, WirelessState } from './client-types';
+import type { ClientEvent, ImprovementStatus, ConfigInput, ConnectionInput, ConnectionMode, LanAddress, Metrics, PageName, PairingResult, PublicConfig, Reply, UsbDevice, WirelessState } from './client-types';
 
 const initialConfig: PublicConfig = { baseUrl: '', model: '', hasKey: false, adbPath: '', serial: '', mode: 'wireless' };
 const emptyWireless: WirelessState = { connected: false, closed: true, pairingAvailable: false };
@@ -28,6 +28,8 @@ const stepReasons: Record<string, string> = {
   TARGET_CLIPPED: '目标超出可见区域',
   AMBIGUOUS_TOUCH_TARGET: '触控区域重叠，无法确定目标',
   TOUCH_TARGET_MISMATCH: '触控位置与目标不一致',
+  WINDOW_OBSCURED: '目标被其他窗口遮挡',
+  EXECUTOR_UPGRADE_REQUIRED: '请安装配套的新版手机端',
   TREE_INCOMPLETE: '刷新后的界面信息不完整',
   SESSION_CHANGED: '手机连接状态已变化',
   WINDOW_CHANGED: '当前页面已切换',
@@ -102,6 +104,8 @@ export function useClient() {
   const [runPending, setRunPending] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [improvement, setImprovement] = useState<ImprovementStatus>({ enabled: false, phase: 'idle', activeSkills: 0, queued: 0, dailyJobs: 0, dailyModelCalls: 0 });
+  const [improvementBusy, setImprovementBusy] = useState(false);
   const [modelTestResult, setModelTestResult] = useState('');
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [lanLoading, setLanLoading] = useState(false);
@@ -137,12 +141,14 @@ export function useClient() {
       if (event.type === 'run_started') { began.current = performance.now(); setRunning(true); setRunPending(false); notify(''); }
       if (event.type === 'idle') { setRunning(false); setRunPending(false); }
       if (event.type === 'emergency_stopped') notify('已急停。请在手机 TapPilot 中恢复自动化后继续。');
+      if (event.type === 'improvement_state' && event.improvement) setImprovement(event.improvement);
       if (event.type === 'wireless_state' && event.state) showWireless(event.state);
       dispatch(event);
     });
     void request(() => api.state()).then(state => {
       if (!state || disposed) return;
       showConfig(state.config); showWireless(state.wireless); setVersion(state.version); setRunning(state.running); setReady(true);
+      if (state.improvement) setImprovement(state.improvement);
       if (state.startupError) notify(state.startupError, true);
     });
     return () => { disposed = true; unsubscribe(); };
@@ -210,6 +216,18 @@ export function useClient() {
     } else setModelTestResult('请先保存配置。');
     setTesting(false);
   };
+  const toggleImprovement = async () => {
+    setImprovementBusy(true);
+    const result = await request(() => api.setImprovement({ enabled: !improvement.enabled }));
+    if (result) setImprovement(result);
+    setImprovementBusy(false);
+  };
+  const rollbackImprovement = async () => {
+    setImprovementBusy(true);
+    const result = await request(() => api.rollbackImprovement());
+    if (result) { setImprovement(result); notify('已撤回当前改进，后续任务生效。'); }
+    setImprovementBusy(false);
+  };
   const refreshDevices = async () => {
     setDevicesLoading(true); const found = await request(() => api.devices()); setDevicesLoading(false);
     if (found) setDevices(found);
@@ -235,6 +253,6 @@ export function useClient() {
   const selectWireless = () => {
     if (!busy && wireless.connected && wireless.deviceId) { setSelectedWirelessId(wireless.deviceId); setMode('wireless'); notify('已选择手机，可开始任务。'); }
   };
-  return { page, setPage, config, draft, setDraft, ready, version, notice, mode, setMode, selectedSerial, selectedWirelessId, wireless, pairing, pairingSeconds, addresses, lanAddress, setLanAddress, lanLoaded, devices, task, setTask, busy, running, run, saving, testing, modelTestResult, devicesLoading, lanLoading, pairingBusy, stopping, connected, deviceName, refreshLAN, save, startRun, startDemo, cancel, emergency, testModel, refreshDevices, selectUsb, startPairing, stopPairing, copyPairing, selectWireless };
+  return { improvement, improvementBusy, toggleImprovement, rollbackImprovement, page, setPage, config, draft, setDraft, ready, version, notice, mode, setMode, selectedSerial, selectedWirelessId, wireless, pairing, pairingSeconds, addresses, lanAddress, setLanAddress, lanLoaded, devices, task, setTask, busy, running, run, saving, testing, modelTestResult, devicesLoading, lanLoading, pairingBusy, stopping, connected, deviceName, refreshLAN, save, startRun, startDemo, cancel, emergency, testModel, refreshDevices, selectUsb, startPairing, stopPairing, copyPairing, selectWireless };
 }
 export type ClientController = ReturnType<typeof useClient>;

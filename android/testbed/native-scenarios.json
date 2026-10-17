@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.tappilot.testbed",
+  "activity": "dev.tappilot.testbed/.MainActivity",
+  "oraclePath": "files/oracle.json",
+  "scenarios": [
+    {
+      "id": "native_refresh",
+      "expected": "success",
+      "change": "continuous",
+      "action": "tap_element"
+    },
+    {
+      "id": "native_rebind",
+      "expected": "success",
+      "change": "armed",
+      "action": "tap_element"
+    },
+    {
+      "id": "native_reorder",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "tap_element",
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED"
+      ]
+    },
+    {
+      "id": "native_replaced",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "tap_element",
+      "reasons": [
+        "TARGET_IDENTITY_CHANGED"
+      ]
+    },
+    {
+      "id": "native_ambiguous",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "tap_element",
+      "reasons": [
+        "TARGET_AMBIGUOUS"
+      ]
+    },
+    {
+      "id": "native_context",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "tap_element",
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED"
+      ]
+    },
+    {
+      "id": "native_overlay",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "tap_element",
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED",
+        "AMBIGUOUS_TOUCH_TARGET",
+        "WINDOW_OBSCURED"
+      ]
+    },
+    {
+      "id": "native_input",
+      "expected": "success",
+      "change": "none",
+      "action": "input_text"
+    },
+    {
+      "id": "native_context_input",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "input_text",
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED"
+      ]
+    },
+    {
+      "id": "native_form_refresh",
+      "expected": "refusal",
+      "change": "continuous",
+      "action": "input_text",
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED"
+      ]
+    },
+    {
+      "id": "native_form_allowed",
+      "expected": "success",
+      "change": "continuous",
+      "action": "input_text",
+      "allowedLabelChanges": [
+        "native_status"
+      ]
+    },
+    {
+      "id": "native_form_recipient",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "input_text",
+      "allowedLabelChanges": [
+        "native_status"
+      ],
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED"
+      ]
+    },
+    {
+      "id": "native_form_recipient_silent",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "input_text",
+      "allowedLabelChanges": [
+        "native_status"
+      ],
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED"
+      ]
+    },
+    {
+      "id": "native_form_account",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "input_text",
+      "allowedLabelChanges": [
+        "native_status"
+      ],
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED"
+      ]
+    },
+    {
+      "id": "native_form_amount",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "input_text",
+      "allowedLabelChanges": [
+        "native_status"
+      ],
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED"
+      ]
+    },
+    {
+      "id": "native_form_status_role",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "input_text",
+      "allowedLabelChanges": [
+        "native_status"
+      ],
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED"
+      ]
+    },
+    {
+      "id": "native_form_label_relation",
+      "expected": "refusal",
+      "change": "armed",
+      "action": "input_text",
+      "allowedLabelChanges": [
+        "native_status"
+      ],
+      "reasons": [
+        "PAGE_CONTEXT_CHANGED",
+        "TARGET_IDENTITY_CHANGED"
+      ]
+    }
+  ]
+}

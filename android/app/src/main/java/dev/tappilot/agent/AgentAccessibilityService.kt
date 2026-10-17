@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
@@ -51,14 +52,16 @@ class AgentAccessibilityService : AccessibilityService() {
         private const val SNAPSHOT_NODE_BYTES = 1024 * 1024 - 8192
     }
 
-    private data class NodeRef(val path: List<Int>, val fingerprint: SnapshotNodeFingerprint, val value: JSONObject)
-    private data class Snapshot(val id: String, val revision: Long, val windowId: Int, val packageName: String, val nodes: Map<String, NodeRef>, val truncated: Boolean, val maxNodes: Int, val maxDepth: Int)
+    private data class NativeContext(val isProtected: Boolean, val signature: String)
+    private data class NodeRef(val path: List<Int>, val fingerprint: SnapshotNodeFingerprint, val value: JSONObject, val contextSignature: String)
+    private data class Snapshot(val id: String, val revision: Long, val windowId: Int, val packageName: String, val nodes: Map<String, NodeRef>, val truncated: Boolean, val maxNodes: Int, val maxDepth: Int, val windowTopology: Long, val missingChild: Boolean, val capacityTruncated: Boolean)
     private val main = Handler(Looper.getMainLooper())
     private val changes = Object()
     // Two of the four socket workers remain available for emergency stop and regular commands.
     private val waitSlots = Semaphore(2)
     private var session = UUID.randomUUID().toString()
     private var counter = 0L
+    private var windowTopology = 0L
     private val snapshots = LinkedHashMap<String, Snapshot>()
     @Volatile private var revision = 0L
     @Volatile private var connected = false
@@ -70,6 +73,9 @@ class AgentAccessibilityService : AccessibilityService() {
     private var hintPackage: String? = null
     private var commandDeadline = Long.MAX_VALUE
     private var commandAllowed: () -> Boolean = { true }
+    private var commandMutationSent = false
+    private var commandObservation: JSONObject? = null
+    private var commandLabelAllowanceCount = 0
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -84,9 +90,16 @@ class AgentAccessibilityService : AccessibilityService() {
             instance = this
         }
         server?.close()
+        server = null
         server = try {
-            RpcServer(this).also { it.start(); transportStatus = "ADB localabstract:tappilot" }
-        } catch (_: Exception) {
+            RpcServer(this, onFailure = { failed, code ->
+                main.post {
+                    if (server === failed) transportStatus = "ADB 连接异常（$code），请重新开启无障碍服务"
+                }
+            }).also { it.start(); transportStatus = "ADB localabstract:tappilot" }
+        } catch (error: Exception) {
+            // This exception is from local socket construction/start, never UI or model content.
+            Log.w("TapPilot.Rpc", "RPC_START_FAILED", error)
             transportStatus = "启动失败，请关闭并重新开启无障碍服务"
             null
         }
@@ -98,11 +111,11 @@ class AgentAccessibilityService : AccessibilityService() {
             activityHint = event.className?.toString()
             hintPackage = event.packageName?.toString()
         }
-        // State notifications can be delayed or repeat for the same active tree.
-        // Retain bounded snapshots for full-tree revalidation after those events.
-        // A window-topology event can add a touch-intercepting overlay without changing
-        // the active root, so it still invalidates all cached coordinate references.
-        advanceRevision(invalidateSnapshots = event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED)
+        // Keep bounded node evidence across delayed events: each node action captures,
+        // rebinds and checks current windows. Raw coordinate references retain a strict
+        // topology epoch, because a new overlay need not alter the active app's tree.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) windowTopology++
+        advanceRevision(invalidateSnapshots = false)
     }
 
     override fun onInterrupt() { runCatching { stopAutomation() } }
@@ -173,13 +186,16 @@ class AgentAccessibilityService : AccessibilityService() {
             if (!connected) throw AgentError("SERVICE_UNAVAILABLE", "Accessibility service is disconnected", true)
             if (!canContinue()) throw AgentError("CANCELLED", "任务已停止")
             commandAllowed = canContinue
+            commandMutationSent = false
+            commandObservation = null
+            commandLabelAllowanceCount = 0
             try { when (method) {
                 "get_device_info" -> JSONObject()
                     .put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL)
                     .put("sdkInt", Build.VERSION.SDK_INT).put("androidVersion", Build.VERSION.RELEASE)
                     .put("serviceConnected", connected).put("stopped", stopped).put("revision", revision)
                     .put("locked", isLocked()).put("transport", "adb-localabstract")
-                    .put("protocolVersion", 1).put("sessionId", session)
+                    .put("protocolVersion", 1).put("sessionId", session).put("executor", NodeActionGuard.EXECUTOR)
                 "get_current_app" -> currentApp()
                 "get_ui_tree" -> { assertReady(); snapshotJson(capture(intParam(params, "maxNodes", 300, 1, 500), intParam(params, "maxDepth", 20, 1, 40))) }
                 "find_element" -> {
@@ -187,6 +203,7 @@ class AgentAccessibilityService : AccessibilityService() {
                     val selector = requiredSelector(params)
                     find(selector, intParam(params, "maxResults", 20, 1, 100))
                 }
+                "tap_element" -> tap(params, gestureCompletion)
                 "click_element" -> click(params)
                 "input_text" -> input(params)
                 "scroll" -> scroll(params)
@@ -198,7 +215,13 @@ class AgentAccessibilityService : AccessibilityService() {
                     accepted("open_settings")
                 }
                 else -> throw AgentError("UNKNOWN_METHOD", "Unsupported method")
-            } } finally { commandAllowed = { true } }
+            } } catch (error: AgentError) {
+                if (method in setOf("tap_element", "click_element", "input_text", "scroll", "swipe") && !commandMutationSent) {
+                    error.nativeNotSent = true
+                    error.nativeObservation = commandObservation
+                }
+                throw error
+            } finally { commandAllowed = { true }; commandObservation = null }
         }
 
     private fun actAndObserve(params: JSONObject, canContinue: () -> Boolean): JSONObject {
@@ -211,7 +234,7 @@ class AgentAccessibilityService : AccessibilityService() {
         val operationSession = session
         val operationAllowed = { canContinue() && session == operationSession }
         val actionName = params.getString("action")
-        val gesture = if (actionName == "swipe") GestureCompletion() else null
+        val gesture = if (actionName == "swipe" || actionName == "tap_element") GestureCompletion() else null
         val action = executeOnMain(actionName, params.getJSONObject("arguments"), operationAllowed, deadline, gesture)
         val acted = SystemClock.elapsedRealtime()
         val result = JSONObject().put("action", action)
@@ -330,32 +353,76 @@ class AgentAccessibilityService : AccessibilityService() {
             .put("visible", node.isVisibleToUser)
     }
 
-    private fun fingerprint(node: AccessibilityNodeInfo): SnapshotNodeFingerprint {
+    /** Keep native semantic content/association evidence private and in memory.
+     * A protected bit alone cannot distinguish a pane or associated label that
+     * changed meaning while retaining the same semantic role.
+     */
+    private fun nativeContext(node: AccessibilityNodeInfo): NativeContext {
+        fun relationship(related: AccessibilityNodeInfo?): String? {
+            if (related == null) return null
+            try {
+                checkDeadline()
+                val password = related.isPassword
+                val fields = listOf(related.windowId, related.hashCode(), related.packageName?.toString(),
+                    related.className?.toString(), related.viewIdResourceName, password,
+                    if (password) "[REDACTED]" else related.text?.toString(),
+                    if (password) "[REDACTED]" else related.contentDescription?.toString(),
+                    Build.VERSION.SDK_INT >= 28 && related.isHeading,
+                    if (password) "[REDACTED]" else if (Build.VERSION.SDK_INT >= 28) related.paneTitle?.toString() else null)
+                // JSON preserves field boundaries even when app text contains NUL.
+                return snapshotFingerprintDigest(listOf(JSONArray(fields).toString()))
+            } finally { related.recycle() }
+        }
+        val heading = Build.VERSION.SDK_INT >= 28 && node.isHeading
+        val paneTitle = if (Build.VERSION.SDK_INT >= 28) node.paneTitle?.toString() else null
+        checkDeadline()
+        val labelFor = relationship(node.labelFor)
+        checkDeadline()
+        val labeledBy = relationship(node.labeledBy)
+        val isProtected = node.isPassword || heading || !paneTitle.isNullOrEmpty() || labelFor != null || labeledBy != null
+        val signature = if (!isProtected) "" else snapshotFingerprintDigest(listOf(JSONArray(listOf(heading,
+            if (node.isPassword) "[REDACTED]" else paneTitle, labelFor, labeledBy)).toString()))
+        return NativeContext(isProtected, signature)
+    }
+
+    private fun fingerprint(node: AccessibilityNodeInfo, context: NativeContext = nativeContext(node)): SnapshotNodeFingerprint {
         // Hash full text in memory without retaining or logging it; returned UI text is capped separately.
         val rect = Rect().also { node.getBoundsInScreen(it) }
         val flags = listOf(node.isClickable, node.isScrollable, node.isEditable, node.isEnabled, node.isPassword,
-            node.isVisibleToUser, node.isCheckable, node.isChecked, node.isSelected, node.isFocused)
+            node.isVisibleToUser, node.isCheckable, node.isChecked, node.isSelected, node.isFocused, context.isProtected)
         val childCount = node.childCount
         val fields = listOf(node.packageName, node.className, node.viewIdResourceName,
             if (flags[4]) "[REDACTED]" else node.text,
             if (flags[4]) "[REDACTED]" else node.contentDescription,
-            rect.toShortString()) + flags.take(6) + childCount + flags.drop(6)
+            rect.toShortString(), context.signature) + flags.take(6) + childCount + flags.drop(6)
         val stateBits = flags.withIndex().fold(0) { bits, (index, enabled) -> if (enabled) bits or (1 shl index) else bits }
         return SnapshotNodeFingerprint(snapshotFingerprintDigest(fields), listOf(rect.left, rect.top, rect.right, rect.bottom), stateBits, childCount)
     }
 
-    private fun capture(maxNodes: Int = 300, maxDepth: Int = 20, retain: Boolean = true): Snapshot {
+    private fun capture(maxNodes: Int = 300, maxDepth: Int = 20, retain: Boolean = true, refreshNodes: Boolean = false): Snapshot {
+        // Accessibility may return a complete but obsolete cached tree before
+        // its content-change event is delivered. Missing-child recovery alone
+        // cannot detect that case. Every observation/dispatch validation must
+        // start with fresh native evidence, never authorize from that cache.
+        val cleared = Build.VERSION.SDK_INT >= 33 && clearCache()
+        val refreshEveryNode = refreshNodes || !cleared
         val root = root()
         try {
             val refs = LinkedHashMap<String, NodeRef>()
             var truncated = false
+            var missingChild = false
+            var capacityTruncated = false
             var visited = 0
             var serializedNodeBytes = 2 // JSON array brackets.
             var byteBudgetExhausted = false
             fun visit(node: AccessibilityNodeInfo, path: List<Int>, parentId: String?, depth: Int) {
                 checkDeadline()
-                if (byteBudgetExhausted || refs.size >= maxNodes || visited >= maxNodes * 4) { truncated = true; return }
+                if (byteBudgetExhausted || refs.size >= maxNodes || visited >= maxNodes * 4) { truncated = true; capacityTruncated = true; return }
                 visited++
+                // Older Android versions have no public service cache-clear API.
+                // Refresh each parent before its child list is inspected when
+                // cache invalidation is unavailable. Failed refresh is missing evidence.
+                if (refreshEveryNode && !node.refresh()) { truncated = true; missingChild = true; return }
                 var nextParent = parentId
                 if (path.isEmpty() || node.isVisibleToUser) {
                     val id = "n${refs.size}"
@@ -364,22 +431,27 @@ class AgentAccessibilityService : AccessibilityService() {
                     if (serializedNodeBytes + nodeBytes > SNAPSHOT_NODE_BYTES) {
                         byteBudgetExhausted = true
                         truncated = true
+                        capacityTruncated = true
                         return
                     }
                     checkDeadline()
-                    refs[id] = NodeRef(path, fingerprint(node), value)
+                    val context = nativeContext(node)
+                    refs[id] = NodeRef(path, fingerprint(node, context), value, context.signature)
                     serializedNodeBytes += nodeBytes
                     nextParent = id
                 }
-                if (depth >= maxDepth) { if (node.childCount > 0) truncated = true; return }
+                if (depth >= maxDepth) { if (node.childCount > 0) { truncated = true; capacityTruncated = true }; return }
                 for (index in 0 until node.childCount) {
-                    if (byteBudgetExhausted || refs.size >= maxNodes || visited >= maxNodes * 4) { truncated = true; break }
-                    val child = node.getChild(index) ?: continue
+                    if (byteBudgetExhausted || refs.size >= maxNodes || visited >= maxNodes * 4) { truncated = true; capacityTruncated = true; break }
+                    // A declared but unreadable child is missing evidence, not an
+                    // empty branch. It may contain an overlay or sensitive control.
+                    val child = node.getChild(index)
+                    if (child == null) { truncated = true; missingChild = true; continue }
                     try { visit(child, path + index, nextParent, depth + 1) } finally { child.recycle() }
                 }
             }
             visit(root, emptyList(), null, 0)
-            val snapshot = Snapshot("$session:${++counter}", revision, root.windowId, root.packageName?.toString().orEmpty(), refs, truncated, maxNodes, maxDepth)
+            val snapshot = Snapshot("$session:${++counter}", revision, root.windowId, root.packageName?.toString().orEmpty(), refs, truncated, maxNodes, maxDepth, windowTopology, missingChild, capacityTruncated)
             if (retain) {
                 snapshots[snapshot.id] = snapshot
                 while (snapshots.size > 4) snapshots.remove(snapshots.keys.first())
@@ -388,10 +460,16 @@ class AgentAccessibilityService : AccessibilityService() {
         } finally { root.recycle() }
     }
 
-    private fun snapshotJson(snapshot: Snapshot): JSONObject = JSONObject()
-        .put("snapshotId", snapshot.id).put("revision", snapshot.revision)
+    private fun snapshotJson(snapshot: Snapshot, forGuard: Boolean = false): JSONObject = JSONObject()
+        .put("snapshotId", snapshot.id).put("revision", snapshot.revision).put("executor", NodeActionGuard.EXECUTOR)
         .put("packageName", snapshot.packageName.take(512)).put("windowId", snapshot.windowId)
-        .put("nodes", JSONArray(snapshot.nodes.values.map { it.value })).put("truncated", snapshot.truncated)
+        .put("nodes", JSONArray(snapshot.nodes.values.map { ref ->
+            if (!forGuard) ref.value else JSONObject().also { value ->
+                ref.value.keys().forEach { key -> value.put(key, ref.value.get(key)) }
+                value.put("contextProtected", ref.fingerprint.stateBits and (1 shl 10) != 0)
+                value.put("contextSignature", ref.contextSignature)
+            }
+        })).put("truncated", snapshot.truncated)
 
     private fun requiredSelector(params: JSONObject): JSONObject =
         (params.opt("selector") as? JSONObject ?: throw AgentError("INVALID_ARGUMENT", "selector must be an object")).also(::validateSelector)
@@ -417,26 +495,60 @@ class AgentAccessibilityService : AccessibilityService() {
     private fun find(selector: JSONObject, maxResults: Int): JSONObject {
         val snapshot = capture(500, 40)
         val matches = snapshot.nodes.values.filter { matches(it.value, selector) }
-        return JSONObject().put("snapshotId", snapshot.id).put("revision", snapshot.revision)
+        return JSONObject().put("snapshotId", snapshot.id).put("revision", snapshot.revision).put("executor", NodeActionGuard.EXECUTOR)
             .put("packageName", snapshot.packageName.take(512)).put("windowId", snapshot.windowId)
             .put("elements", JSONArray(matches.take(maxResults).map { it.value }))
             .put("truncated", snapshot.truncated || matches.size > maxResults)
     }
 
-    private fun resolve(params: JSONObject): Triple<Snapshot, NodeRef, AccessibilityNodeInfo> {
+    /** Capture and rebind inside the phone command, immediately before native dispatch.
+     * Accessibility is cross-process: this narrows the race, it does not promise an atomic UI transaction.
+     */
+    private fun resolve(params: JSONObject, action: String): Triple<Snapshot, NodeRef, AccessibilityNodeInfo> {
         assertReady()
         val snapshotId = stringParam(params, "snapshotId", 128)
         val nodeId = stringParam(params, "nodeId", 64)
-        val snapshot = snapshots[snapshotId] ?: throw staleSnapshot(SnapshotStaleReason.SNAPSHOT_MISSING)
-        if (snapshot.revision != revision) verifyUnchangedTree(snapshot)
-        val ref = snapshot.nodes[nodeId] ?: throw AgentError("NODE_NOT_FOUND", "nodeId does not belong to this snapshot")
+        val previous = snapshots[snapshotId] ?: run {
+            commandObservation = snapshotJson(capture())
+            throw staleSnapshot(SnapshotStaleReason.SNAPSHOT_MISSING)
+        }
+        val fresh = captureWithMissingChildRecovery({ refresh ->
+            assertReady()
+            // One extra fresh read handles transiently unavailable adapter
+            // children; never wait for all labels to stop or repeat a mutation.
+            capture(previous.maxNodes, previous.maxDepth, refreshNodes = refresh && Build.VERSION.SDK_INT < 33)
+        }, { it.missingChild && !it.capacityTruncated })
+        val observation = snapshotJson(fresh)
+        commandObservation = observation
+        val allowances = params.optJSONArray("allowedLabelChanges")?.let { array ->
+            (0 until array.length()).map(array::getString)
+        } ?: emptyList()
+        val previousGuard = NodeActionGuard(snapshotJson(previous, forGuard = true))
+        val freshGuard = NodeActionGuard(snapshotJson(fresh, forGuard = true))
+        val reboundId = try { previousGuard.rebind(freshGuard, nodeId, action, allowances) }
+        catch (error: AgentError) {
+            if (error.reason == "PAGE_CONTEXT_CHANGED") {
+                previousGuard.changedLabelNodeIds(freshGuard)?.let { changed ->
+                    observation.put("changedLabelNodeIds", JSONArray(changed))
+                    throw AgentError(error.code,
+                        "The target still matches, but labels identified by observation.changedLabelNodeIds changed. No action was sent. Inspect their meaning; only unrelated status labels may be explicitly declared in allowedLabelChanges. Never exempt recipients, accounts or amounts.",
+                        error.retryable, error.reason)
+                }
+            }
+            throw error
+        }
+        commandLabelAllowanceCount = allowances.size
+        val ref = fresh.nodes[reboundId] ?: throw AgentError("NODE_NOT_FOUND", "The rebound target is absent")
+        return Triple(fresh, ref, resolveLive(fresh, ref))
+    }
+
+    private fun resolveLive(snapshot: Snapshot, ref: NodeRef): AccessibilityNodeInfo {
         var node = root()
         try {
             if (node.windowId != snapshot.windowId || node.packageName?.toString() != snapshot.packageName) throw staleSnapshot(SnapshotStaleReason.WINDOW_CHANGED)
             for (index in ref.path) {
                 val next = node.getChild(index) ?: throw staleSnapshot(SnapshotStaleReason.NODE_UNAVAILABLE)
-                node.recycle()
-                node = next
+                node.recycle(); node = next
             }
             if (!node.refresh()) throw staleSnapshot(SnapshotStaleReason.NODE_UNAVAILABLE)
             fingerprint(node).changeFrom(ref.fingerprint)?.let { throw staleSnapshot(it) }
@@ -444,13 +556,53 @@ class AgentAccessibilityService : AccessibilityService() {
             if (!node.isVisibleToUser) throw AgentError("NODE_NOT_VISIBLE", "Node is not currently visible")
             if (!node.isEnabled) throw AgentError("NODE_DISABLED", "Node is disabled")
             if (node.isPassword) throw AgentError("SENSITIVE_FIELD", "Password fields cannot be operated")
-            return Triple(snapshot, ref, node)
+            return node
         } catch (error: Exception) { node.recycle(); throw error }
+    }
+
+    /** Windows above the observed app may intercept touch even when absent from its tree. */
+    private fun assertUnobscured(snapshot: Snapshot, region: NodeActionGuard.Box) {
+        val currentWindows = windows
+        try {
+            val active = currentWindows.firstOrNull { it.id == snapshot.windowId }
+                ?: throw AgentError("TARGET_CHANGED", "The active window could not be verified", true, "WINDOW_CHANGED")
+            if (currentWindows.any { window ->
+                if (window.id == active.id || window.layer <= active.layer) false
+                else {
+                    val bounds = Rect().also { window.getBoundsInScreen(it) }
+                    region.intersect(NodeActionGuard.Box(bounds.left, bounds.top, bounds.right, bounds.bottom)) != null
+                }
+            }) throw AgentError("NODE_NOT_ACTIONABLE", "Another window covers the selected target. No action was sent.", false, "WINDOW_OBSCURED")
+        } finally { currentWindows.forEach { it.recycle() } }
+    }
+
+    private fun nodeAccepted(action: String, method: String, targetId: String, actedId: String = targetId): JSONObject = accepted(action)
+        .put("executor", NodeActionGuard.EXECUTOR).put("method", method).put("targetNodeId", targetId)
+        .put("actedNodeId", actedId).put("dispatchState", "sent")
+        .put("contextVerification", if (commandLabelAllowanceCount > 0) "explicit_label_changes" else "default_context")
+        .put("allowedLabelChangesCount", commandLabelAllowanceCount)
+
+    private fun tap(params: JSONObject, completion: GestureCompletion?): JSONObject {
+        val (snapshot, ref, target) = resolve(params, "tap_element")
+        try {
+            val guard = NodeActionGuard(snapshotJson(snapshot))
+            val metrics = resources.displayMetrics
+            val touch = guard.touch(ref.value.getString("nodeId"), metrics.widthPixels, metrics.heightPixels)
+            val actedRef = snapshot.nodes[touch.actedNodeId] ?: throw AgentError("NODE_NOT_FOUND", "The touch target is absent")
+            val acted = if (actedRef === ref) target else resolveLive(snapshot, actedRef)
+            try {
+                assertUnobscured(snapshot, NodeActionGuard.Box(touch.x - 1, touch.y - 1, touch.x + 2, touch.y + 2))
+                assertReady()
+                dispatchTouch(touch.x, touch.y, touch.x, touch.y, 80, completion)
+                return nodeAccepted("tap", "dispatchGesture", touch.targetNodeId, touch.actedNodeId).put("completion", "pending").put("durationMs", 80)
+            } finally { if (acted !== target) acted.recycle() }
+        } finally { target.recycle() }
     }
 
     /** An event alone is not proof of changed UI, but a changed or incomplete tree is. */
     private fun verifyUnchangedTree(snapshot: Snapshot) {
         val validator = StreamingSnapshotValidator(snapshot.nodes.values.map { SnapshotNodeState(it.path, it.fingerprint) }, !snapshot.truncated)
+        val refreshEveryNode = !(Build.VERSION.SDK_INT >= 33 && clearCache())
         val root = root()
         try {
             if (root.windowId != snapshot.windowId || root.packageName?.toString() != snapshot.packageName) {
@@ -461,6 +613,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 checkDeadline()
                 if (validator.count >= snapshot.maxNodes || visited >= snapshot.maxNodes * 4) validator.incomplete()
                 visited++
+                if (refreshEveryNode && !node.refresh()) validator.incomplete()
                 if (path.isEmpty() || node.isVisibleToUser) validator.accept(path, fingerprint(node))
                 if (depth >= snapshot.maxDepth) {
                     if (node.childCount > 0) validator.incomplete()
@@ -468,9 +621,9 @@ class AgentAccessibilityService : AccessibilityService() {
                 }
                 for (index in 0 until node.childCount) {
                     if (validator.count >= snapshot.maxNodes || visited >= snapshot.maxNodes * 4) validator.incomplete()
-                    // Match capture's traversal: an unavailable child contributes no
-                    // nodes; changed visible paths/counts still fail validation.
-                    val child = node.getChild(index) ?: continue
+                    // Match capture: an unavailable declared child never proves
+                    // a complete tree, even when the old visible paths match.
+                    val child = node.getChild(index) ?: validator.incomplete()
                     try { visit(child, path + index, depth + 1) } finally { child.recycle() }
                 }
             }
@@ -482,7 +635,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     private fun click(params: JSONObject): JSONObject {
-        val (snapshot, ref, target) = resolve(params)
+        val (snapshot, ref, target) = resolve(params, "click_element")
         var acted = target
         var path = ref.path
         var ancestorHops = 0
@@ -502,10 +655,17 @@ class AgentAccessibilityService : AccessibilityService() {
                 ?: throw AgentError("NODE_NOT_ACTIONABLE", "Clickable ancestor was not included in the snapshot; read a deeper tree before acting")
             if (!acted.refresh()) throw staleSnapshot(SnapshotStaleReason.NODE_UNAVAILABLE)
             fingerprint(acted).changeFrom(actedEntry.value.fingerprint)?.let { throw staleSnapshot(it) }
+            val guard = NodeActionGuard(snapshotJson(snapshot))
+            // A semantic click must not bypass the same-window visibility guard
+            // merely because ACTION_CLICK can activate a covered control.
+            val touch = guard.touch(ref.value.getString("nodeId"), resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+            if (touch.actedNodeId != actedEntry.key) throw AgentError("TARGET_CHANGED", "The native click destination changed", true, "TARGET_IDENTITY_CHANGED")
+            assertUnobscured(snapshot, guard.targetBounds(actedEntry.key))
             val actedValue = nodeJson(acted, actedEntry.key, null)
             assertReady()
+            commandMutationSent = true
             if (!acted.performAction(AccessibilityNodeInfo.ACTION_CLICK)) throw AgentError("ACTION_REJECTED", "Android or the app rejected ACTION_CLICK; inspect the UI before retrying")
-            return accepted("click").put("target", ref.value).put("actedNode", actedValue).put("ancestorHops", ancestorHops)
+            return nodeAccepted("click", "ACTION_CLICK", ref.value.getString("nodeId"), actedEntry.key).put("target", ref.value).put("actedNode", actedValue).put("ancestorHops", ancestorHops)
         } finally {
             if (acted !== target) acted.recycle()
             target.recycle()
@@ -514,13 +674,18 @@ class AgentAccessibilityService : AccessibilityService() {
 
     private fun input(params: JSONObject): JSONObject {
         val text = stringParam(params, "text", 16_384, allowEmpty = true)
-        val (_, _, node) = resolve(params)
+        val (snapshot, ref, node) = resolve(params, "input_text")
         try {
             if (!node.isEditable) throw AgentError("NOT_EDITABLE", "Node is not an editable field")
             val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
             assertReady()
+            assertUnobscured(snapshot, NodeActionGuard(snapshotJson(snapshot)).targetBounds(ref.value.getString("nodeId")))
+            commandMutationSent = true
             if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) throw AgentError("ACTION_REJECTED", "App rejected ACTION_SET_TEXT; custom editors may not support native text input")
-            return accepted("set_text")
+            val result = nodeAccepted("set_text", "ACTION_SET_TEXT", ref.value.getString("nodeId"))
+            // This checks a field value, not an application-level completion claim.
+            result.put("textVerified", node.refresh() && node.text?.toString().orEmpty() == text)
+            return result
         } finally { node.recycle() }
     }
 
@@ -535,12 +700,14 @@ class AgentAccessibilityService : AccessibilityService() {
             "right" -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id
             else -> throw AgentError("INVALID_ARGUMENT", "direction must be forward/backward/up/down/left/right")
         }
-        val (_, _, node) = resolve(params)
+        val (snapshot, ref, node) = resolve(params, "scroll")
         try {
             if (!node.isScrollable) throw AgentError("NOT_SCROLLABLE", "Selected node is not scrollable; select a scrollable container from the tree")
             assertReady()
+            assertUnobscured(snapshot, NodeActionGuard(snapshotJson(snapshot)).targetBounds(ref.value.getString("nodeId")))
+            commandMutationSent = true
             if (!node.performAction(action)) throw AgentError("ACTION_REJECTED", "Scroll was rejected or the container reached its boundary")
-            return accepted("scroll").put("direction", direction)
+            return nodeAccepted("scroll", "ACTION_SCROLL", ref.value.getString("nodeId")).put("direction", direction)
         } finally { node.recycle() }
     }
 
@@ -548,6 +715,7 @@ class AgentAccessibilityService : AccessibilityService() {
         assertReady()
         val snapshotId = stringParam(params, "snapshotId", 128)
         val snapshot = snapshots[snapshotId] ?: throw staleSnapshot(SnapshotStaleReason.SNAPSHOT_MISSING)
+        if (snapshot.windowTopology != windowTopology) throw staleSnapshot(SnapshotStaleReason.WINDOW_CHANGED)
         if (snapshot.truncated) throw AgentError("TRUNCATED_SNAPSHOT", "Coordinate gestures require a complete snapshot. Read with larger maxNodes/maxDepth, or use native scroll.")
         verifyUnchangedTree(snapshot)
         val metrics = resources.displayMetrics
@@ -556,6 +724,15 @@ class AgentAccessibilityService : AccessibilityService() {
         val ex = intParam(params, "endX", null, 0, metrics.widthPixels - 1)
         val ey = intParam(params, "endY", null, 0, metrics.heightPixels - 1)
         val duration = intParam(params, "durationMs", 350, 50, 2000)
+        if (kotlin.math.hypot((ex - sx).toDouble(), (ey - sy).toDouble()) <= 24) {
+            NodeActionGuard(snapshotJson(snapshot)).validateShortGesture(sx, sy, ex, ey)
+        }
+        assertUnobscured(snapshot, NodeActionGuard.Box(minOf(sx, ex) - 1, minOf(sy, ey) - 1, maxOf(sx, ex) + 2, maxOf(sy, ey) + 2))
+        dispatchTouch(sx, sy, ex, ey, duration, completion)
+        return accepted("swipe").put("completion", "pending").put("durationMs", duration).put("dispatchState", "sent").put("executor", NodeActionGuard.EXECUTOR)
+    }
+
+    private fun dispatchTouch(sx: Int, sy: Int, ex: Int, ey: Int, duration: Int, completion: GestureCompletion?) {
         val path = Path().apply { moveTo(sx.toFloat(), sy.toFloat()); lineTo(ex.toFloat(), ey.toFloat()) }
         val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, duration.toLong())).build()
         val gestureSession = session
@@ -570,8 +747,8 @@ class AgentAccessibilityService : AccessibilityService() {
             }
         }
         assertReady()
+        commandMutationSent = true
         if (!dispatchGesture(gesture, callback, main)) throw AgentError("ACTION_REJECTED", "Android rejected the gesture")
-        return accepted("swipe").put("completion", "pending").put("durationMs", duration)
     }
 
     private fun pressKey(params: JSONObject): JSONObject {

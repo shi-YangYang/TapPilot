@@ -101,3 +101,26 @@ test("emergency gate prevents dispatch after delayed ADB setup and immediately b
     assert.equal(requests, 0);
   } finally { await bridge.close(); await f.close(); }
 });
+
+test("USB preserves native not-sent evidence and observation only in the strict refusal envelope", async () => {
+  const error = { code: "TARGET_CHANGED", message: "Synthetic target changed", retryable: true,
+    details: { executor: "node-v1", dispatchState: "not_sent", reason: "PAGE_CONTEXT_CHANGED" } };
+  const observation = { executor: "node-v1", snapshotId: "synthetic:2", nodes: [] };
+  const f = await fixture((socket, request) => socket.end(JSON.stringify({ id: request.id, ok: false, error, observation, meta: { durationMs: 1 } }) + "\n"));
+  try {
+    const response = await requestJson(f.port, "act_and_observe", {}, 1000);
+    assert.deepEqual(response.error, error);
+    assert.deepEqual(response.observation, observation);
+  } finally { await f.close(); }
+  for (const unsafe of [
+    { ...error, details: { ...error.details, reason: "private text" } },
+    { ...error, details: { ...error.details, dispatchState: "sent" } },
+    { ...error, details: { ...error.details, rawLabel: "private text" } },
+    { ...error, code: "BRIDGE_TIMEOUT" },
+    { ...error, details: undefined },
+  ]) {
+    const bad = await fixture((socket, request) => socket.end(JSON.stringify({ id: request.id, ok: false, error: unsafe, observation, meta: { durationMs: 1 } }) + "\n"));
+    try { await assert.rejects(requestJson(bad.port, "act_and_observe", {}, 1000), { code: "BRIDGE_PROTOCOL_ERROR" }); }
+    finally { await bad.close(); }
+  }
+});

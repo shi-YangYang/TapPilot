@@ -62,3 +62,11 @@ internal class StreamingSnapshotValidator(private val expected: List<SnapshotNod
 
     fun incomplete(): Nothing = throw staleSnapshot(SnapshotStaleReason.TREE_INCOMPLETE)
 }
+
+/** One read-only recovery for unavailable children, never a retry loop around an action.
+ * Capacity/depth truncation is not a transient-cache signal and must not enter this path.
+ */
+internal fun <T> captureWithMissingChildRecovery(read: (refreshCache: Boolean) -> T, missingChild: (T) -> Boolean): T {
+    val first = read(false)
+    return if (missingChild(first)) read(true) else first
+}

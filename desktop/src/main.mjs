@@ -6,6 +6,9 @@ import { pathToFileURL } from 'node:url';
 import { runAgent, testModel, RuntimeError } from '../../server/dist/runtime/index.js';
 import { DiagnosticStore } from '../../server/dist/diagnostics/index.js';
 import { LearningStore, summarizeCandidates, modelScope } from '../../server/dist/learning/index.js';
+import { SkillStore } from '../../server/dist/skills/store.js';
+import { ContinuousImprover } from '../../server/dist/skills/loop.js';
+import { SKILL_POLICY_REVISION, skillHash } from '../../server/dist/skills/schema.js';
 import { createUsbClient, createWirelessClient, listUsbDevices } from '../../server/dist/client-tools.js';
 import { WirelessHub, listLANAddresses } from '../../server/dist/wireless.js';
 import QRCode from 'qrcode';
@@ -19,6 +22,10 @@ let window;
 let store;
 let diagnostics;
 let learning;
+let skills;
+let improver;
+let improvementStopped = false;
+const revokedSkills = new Set();
 const disabledExperiences = new Set();
 let active;
 let stopping = false;
@@ -70,7 +77,7 @@ function handle(name, operation) {
   ipcMain.handle(`tappilot:${name}`, async (event, value) => {
     try {
       assertSender(event, window, pageUrl);
-      if (!['save-config', 'run', 'emergency-stop', 'wireless-start'].includes(name) && value !== undefined) throw new ClientError('INVALID_INPUT', '此请求不接受参数。');
+      if (!['save-config', 'run', 'emergency-stop', 'wireless-start', 'improvement-set'].includes(name) && value !== undefined) throw new ClientError('INVALID_INPUT', '此请求不接受参数。');
       return { ok: true, result: await operation(value) };
     }
     catch (error) { return { ok: false, error: { code: typeof error?.code === 'string' ? error.code.slice(0, 80) : 'CLIENT_ERROR', message: safeMessage(error) } }; }
@@ -83,31 +90,48 @@ async function adbPath() {
   return 'adb';
 }
 async function begin(value, demo) {
-  if (active || stopping) throw new ClientError('RUNNING', '已有任务正在执行或停止，请稍后再试。');
+  if (active || stopping || savingConfig || modelTest) throw new ClientError('RUNNING', '已有任务正在执行或停止，请稍后再试。');
   const input = demo ? undefined : taskInput(value);
   const model = demo ? undefined : store.model();
   if (input?.mode === 'wireless') wireless.forDevice(input.deviceId);
   const controller = new AbortController();
   const run = { controller, client: undefined, demo, target: input };
   active = run;
+  improvementStopped = false;
   // Acknowledge immediately; long-running work reports progress through one-way events.
   void (async () => {
     try {
       send({ type: 'run_started', demo });
+      await improver.pause().catch(() => {});
+      controller.signal.throwIfAborted();
       const onEvent = event => send({ ...publicEvent(event), demo });
       let result;
       if (demo) result = await runDemo(controller.signal, onEvent);
       else {
         const scope = modelScope(model);
         const learningSnapshot = (await learning.loadActive(app.getVersion(), scope.modelFamily, Date.now(), scope.modelProfile).catch(() => [])).filter(entry => !disabledExperiences.has(entry.id));
+        const skillScope = { hostVersion: app.getVersion(), policyRevision: SKILL_POLICY_REVISION, modelProfile: scope.modelProfile };
+        const skillSnapshot = (await skills.loadTaskSnapshot(skillScope).catch(() => [])).filter(spec => !revokedSkills.has(skillHash(spec)));
+        const usedSkills = new Set();
+        const failedSkills = new Set();
+        let episode;
         const runDiagnostics = [];
         const usedExperiences = new Set();
         run.client = input.mode === 'wireless' ? createWirelessClient(wireless.forDevice(input.deviceId)) : await createUsbClient({ adbPath: await adbPath(), serial: input.serial });
         if (controller.signal.aborted) throw new ClientError('CANCELLED', '操作已取消。');
         result = await runAgent({ task: input.task, model, modelFetch, tools: run.client.tools, execute: (name, args, signal) => run.client.execute(name, args, signal), signal: controller.signal, onEvent, maxTurns: 24,
-          diagnosticVersion: app.getVersion(), learningSnapshot, onExperienceUsed: ids => ids.forEach(id => usedExperiences.add(id)),
+          diagnosticVersion: app.getVersion(), learningSnapshot, skillSnapshot,
+          onSkillUsed: hashes => hashes.forEach(hash => usedSkills.add(hash)),
+          onSkillTrace: step => { if (!['NONE', 'CANCELLED'].includes(step.errorCode)) usedSkills.forEach(hash => failedSkills.add(hash)); },
+          onFailureEpisode: value => { episode = value; }, onExperienceUsed: ids => ids.forEach(id => usedExperiences.add(id)),
           onDiagnostic: event => { void diagnostics.append(event); if (runDiagnostics.length < 500) runDiagnostics.push(event); } });
-        // Local post-task hypotheses do not activate themselves or call a model.
+        // Revoke before another foreground task can load its frozen snapshot.
+        // A completed model answer is not independent proof of semantic success.
+        if (result.status === 'failed') usedSkills.forEach(hash => failedSkills.add(hash));
+        failedSkills.forEach(hash => revokedSkills.add(hash));
+        if (failedSkills.size) await skills.recordUsageOutcome([...failedSkills].slice(0, 3), 'failure').catch(() => {});
+        if (episode && !improvementStopped) await skills.recordEpisode(episode).catch(() => {});
+        // The earlier fixed-strategy store remains compatible with developer tools.
         // Failure conservatively disables advice for the next task; completed
         // alone is not an independent success signal and never trains a success.
         if (result.status === 'failed') {
@@ -126,6 +150,7 @@ async function begin(value, demo) {
       await run.client?.close().catch(() => {});
       if (active === run) active = undefined;
       send({ type: 'idle' });
+      if (!improvementStopped && !active && !modelTest && !savingConfig) improver.schedule();
     }
   })();
   return { started: true, demo };
@@ -136,6 +161,8 @@ async function emergency(value) {
   const was = active;
   // Cancellation is local and immediate, even if phone stop cannot be confirmed.
   was?.controller.abort();
+  improvementStopped = true;
+  void improver.cancel().catch(() => {});
   if (was?.demo) return { phoneStopped: false, demo: true };
   // During a task, stop its pinned target even if the device page selection has changed.
   const target = was?.target ?? taskInput({ task: 'emergency-stop', ...value });
@@ -157,6 +184,7 @@ app.whenReady().then(async () => {
   // must never be sent to persistent diagnostics.
   diagnostics = new DiagnosticStore({ rootDirectory: app.getPath('userData') });
   learning = new LearningStore(app.getPath('userData'));
+  skills = new SkillStore(app.getPath('userData'));
   modelFetch = createModelFetch();
   wireless = new WirelessSession({ startHub: options => WirelessHub.start(options), addresses: listLANAddresses,
     qr: value => QRCode.toDataURL(value, { errorCorrectionLevel: 'M', margin: 3, width: 300, color: { dark: '#171717', light: '#ffffff' } }),
@@ -172,16 +200,20 @@ app.whenReady().then(async () => {
     decrypt: async value => (await safeStorage.decryptStringAsync(value)).result
   });
   try { await store.load(); } catch (error) { startupError = safeMessage(error); }
-  handle('state', () => ({ config: store.public(), running: Boolean(active), version: app.getVersion(), startupError, wireless: wireless.status() }));
+  improver = new ContinuousImprover({ store: skills, modelFetch, resolveModel: () => {
+    if (active || stopping || modelTest || savingConfig || improvementStopped) return undefined;
+    try { return store.model(); } catch { return undefined; }
+  }, onStatus: improvement => send({ type: 'improvement_state', improvement }) });
+  handle('state', async () => ({ improvement: await improver.status().catch(() => ({ enabled: false, phase: 'error', activeSkills: 0, queued: 0, dailyJobs: 0, dailyModelCalls: 0 })), config: store.public(), running: Boolean(active), version: app.getVersion(), startupError, wireless: wireless.status() }));
   handle('save-config', async value => {
-    if (active || savingConfig) throw new ClientError('RUNNING', '请等待任务或配置保存结束。');
+    if (active || savingConfig || modelTest) throw new ClientError('RUNNING', '请等待任务或配置保存结束。');
     savingConfig = true;
-    try { return await store.save(value); } finally { savingConfig = false; }
+    try { await improver.pause(); return await store.save(value); } finally { savingConfig = false; if (!improvementStopped) improver.schedule(); }
   });
   handle('test-model', async () => {
-    if (active || modelTest) throw new ClientError('TEST_RUNNING', '请等待当前任务或模型测试结束。');
+    if (active || modelTest || savingConfig) throw new ClientError('TEST_RUNNING', '请等待当前任务或模型测试结束。');
     const controller = new AbortController(); modelTest = controller;
-    try { return await testModel(store.model(), controller.signal, modelFetch); } finally { modelTest = undefined; }
+    try { await improver.pause(); return await testModel(store.model(), controller.signal, modelFetch); } finally { modelTest = undefined; if (!improvementStopped && !active) improver.schedule(); }
   });
   handle('devices', async () => (await listUsbDevices(await adbPath())).map(({ serial, state, usb, emulator, model }) => ({ serial, state, usb, emulator, model })));
   handle('wireless-interfaces', () => wireless.interfaces());
@@ -189,11 +221,19 @@ app.whenReady().then(async () => {
     if (active || stopping) throw new ClientError('RUNNING', '请结束当前任务后配对手机。');
     return wireless.start(value);
   });
-  handle('wireless-close', async () => { if (active?.target?.mode === 'wireless') active.controller.abort(); await wireless.close(); return { closed: true }; });
+  handle('wireless-close', async () => { if (active?.target?.mode === 'wireless') { active.controller.abort(); improvementStopped = true; await improver.cancel(); } await wireless.close(); return { closed: true }; });
   handle('wireless-copy', () => { clipboard.writeText(wireless.pairingUri()); return { copied: true }; });
   handle('run', value => begin(value, false));
   handle('demo', () => begin(undefined, true));
-  handle('cancel', () => { active?.controller.abort(); modelTest?.abort(); return { cancelled: true }; });
+  handle('cancel', async () => { active?.controller.abort(); modelTest?.abort(); improvementStopped = true; await improver.cancel(); return { cancelled: true }; });
+  handle('improvement-set', async value => {
+    object(value, ['enabled']);
+    if (typeof value.enabled !== 'boolean') throw new ClientError('INVALID_INPUT', '请指定是否开启自动改进。');
+    if (value.enabled) improvementStopped = false;
+    await improver.setEnabled(value.enabled);
+    return improver.status();
+  });
+  handle('improvement-rollback', async () => { await improver.rollback(); return improver.status(); });
   handle('emergency-stop', emergency);
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -204,6 +244,7 @@ app.whenReady().then(async () => {
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'TapPilot', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }] }, { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] }]));
   await window.loadFile(page);
+  if (!startupError) improver.schedule();
 });
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { active?.controller.abort(); modelTest?.abort(); void active?.client?.close(); void wireless?.close(); });
+app.on('before-quit', () => { improvementStopped = true; void improver?.cancel().catch(() => {}); active?.controller.abort(); modelTest?.abort(); void active?.client?.close(); void wireless?.close(); });

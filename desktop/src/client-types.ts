@@ -36,6 +36,15 @@ export interface Metrics {
   completionReads?: number;
   preflightReads?: number;
 }
+export interface ImprovementStatus {
+  enabled: boolean;
+  phase: 'idle' | 'queued' | 'generating' | 'evaluating' | 'adopted' | 'rejected' | 'paused' | 'budget_exhausted' | 'error';
+  activeSkills: number;
+  queued: number;
+  dailyJobs: number;
+  dailyModelCalls: number;
+  lastReason?: string;
+}
 export interface ClientEvent {
   type: string;
   demo?: boolean;
@@ -52,13 +61,16 @@ export interface ClientEvent {
   error?: { code?: string; message: string };
   metrics?: Metrics;
   state?: WirelessState;
+  improvement?: ImprovementStatus;
 }
 export type ConnectionInput = { mode: 'wireless'; deviceId: string } | { mode: 'usb'; serial: string };
 export type Reply<T> = { ok: true; result: T } | { ok: false; error: { code?: string; message: string } };
 export interface TapPilotApi {
-  state(): Promise<Reply<{ config: PublicConfig; running: boolean; version: string; startupError?: string; wireless: WirelessState }>>;
+  state(): Promise<Reply<{ config: PublicConfig; running: boolean; version: string; startupError?: string; wireless: WirelessState; improvement?: ImprovementStatus }>>;
   saveConfig(value: ConfigInput): Promise<Reply<PublicConfig>>;
   testModel(): Promise<Reply<{ model: string; durationMs: number }>>;
+  setImprovement(value: { enabled: boolean }): Promise<Reply<ImprovementStatus>>;
+  rollbackImprovement(): Promise<Reply<ImprovementStatus>>;
   devices(): Promise<Reply<UsbDevice[]>>;
   wirelessInterfaces(): Promise<Reply<LanAddress[]>>;
   wirelessStart(value: { host: string }): Promise<Reply<PairingResult>>;

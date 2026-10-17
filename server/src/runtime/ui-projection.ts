@@ -78,7 +78,7 @@ const scalarFields = [
 const actionRejectionReasons = new Set([
   "INCOMPLETE_TREE", "INVALID_HIERARCHY", "TARGET_DISABLED", "TARGET_HIDDEN", "SENSITIVE_TARGET",
   "NO_CLICKABLE_TARGET", "HIDDEN_ANCESTOR", "INVALID_BOUNDS", "TARGET_CLIPPED",
-  "AMBIGUOUS_TOUCH_TARGET", "TOUCH_TARGET_MISMATCH",
+  "AMBIGUOUS_TOUCH_TARGET", "TOUCH_TARGET_MISMATCH", "WINDOW_OBSCURED",
   "TREE_INCOMPLETE", "SESSION_CHANGED", "WINDOW_CHANGED", "TARGET_IDENTITY_CHANGED",
   "TARGET_AMBIGUOUS", "PAGE_CONTEXT_CHANGED", "TARGET_NOT_ACTIONABLE",
   "SNAPSHOT_MISSING", "TREE_STRUCTURE_CHANGED", "NODE_CONTENT_CHANGED",
@@ -107,6 +107,12 @@ export function projectToolResult(value: unknown): unknown {
     const item = value[key];
     if (item === null || ["string", "number", "boolean"].includes(typeof item)) result[key] = item;
   }
+  if (value.contextVerification === "default_context" || value.contextVerification === "explicit_label_changes") {
+    result.contextVerification = value.contextVerification;
+  }
+  if (typeof value.allowedLabelChangesCount === "number" && Number.isInteger(value.allowedLabelChangesCount) && value.allowedLabelChangesCount >= 0 && value.allowedLabelChangesCount <= 8) {
+    result.allowedLabelChangesCount = value.allowedLabelChangesCount;
+  }
   for (const key of ["error", "observationError"]) {
     const error = projectError(value[key]);
     if (error) result[key] = error;
@@ -125,11 +131,20 @@ export function projectToolResult(value: unknown): unknown {
   const pkg = typeof value.packageName === "string" ? value.packageName : undefined;
   for (const key of ["nodes", "elements"]) if (Array.isArray(value[key])) {
     const nodes = value[key] as unknown[];
-    result[key] = projectNodes(nodes, pkg, key === "elements");
+    const projected = projectNodes(nodes, pkg, key === "elements");
+    result[key] = projected;
     if (key === "nodes") {
       const roots = nodes.filter(isObject).filter(node => node.parentId == null).map(node => bounds(node.bounds)).filter((rect): rect is number[] => Boolean(rect));
       if (roots.length === 1) result.rootBounds = roots[0];
       else if (roots.length > 1) result.rootBounds = roots;
+      // This is a bounded observation fact, never a safe-to-ignore list. Keep it
+      // only when every referenced fresh node remains visible to the model.
+      const changed = value.changedLabelNodeIds;
+      if (hasText(value.snapshotId) && Array.isArray(changed) && changed.length >= 1 && changed.length <= 8 &&
+          changed.every(id => typeof id === "string" && id.length >= 1 && id.length <= 64) && new Set(changed).size === changed.length &&
+          changed.every(id => projected.filter(node => node.nodeId === id).length === 1)) {
+        result.changedLabelNodeIds = [...changed];
+      }
     }
   }
   // These fields are added by Conversation after rejecting supplied host-field lookalikes.

@@ -32,6 +32,7 @@ class MainActivity : Activity() {
     private lateinit var body: LinearLayout
     private var dialog: AlertDialog? = null
     private var webView: WebView? = null
+    private var variantScene: VariantScenes? = null
     private var scene = "navigation"
     private var seed = 0
     private var refreshCount = 0
@@ -50,6 +51,7 @@ class MainActivity : Activity() {
 
     private fun initialize(intent: Intent) {
         handler.removeCallbacksAndMessages(null)
+        variantScene?.close(); variantScene = null
         dialog?.dismiss(); dialog = null
         webView?.destroy(); webView = null
         scene = intent.getStringExtra("scene")?.takeIf { it in OracleState.scenes } ?: "navigation"
@@ -59,6 +61,17 @@ class MainActivity : Activity() {
             runCatching { UUID.fromString(supplied).toString() }.getOrNull()
         } ?: UUID.randomUUID().toString()
         OracleState.reset(this, scene, seed, runId)
+        if (intent.hasExtra("variant")) {
+            val variant = runCatching { ScenarioVariant.parse(requireNotNull(intent.getStringExtra("variant")), scene, seed) }.getOrNull()
+            if (variant == null) {
+                screen("配置错误", "configuration_error")
+                label("合成测试配置无效")
+                OracleState.update("configurationError" to true)
+            } else {
+                variantScene = VariantScenes(this, handler, variant).also { it.show() }
+            }
+            return
+        }
         when (scene) {
             "navigation" -> navigation("home")
             "search" -> search()
@@ -68,6 +81,7 @@ class MainActivity : Activity() {
             "long_list" -> longList()
             "webview" -> web()
             "canvas" -> canvas()
+            in NativeExecutorScenes.names -> NativeExecutorScenes.show(this, scene, handler)
         }
     }
 
@@ -296,6 +310,7 @@ class MainActivity : Activity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        variantScene?.close()
         dialog?.dismiss(); webView?.destroy()
         super.onDestroy()
     }

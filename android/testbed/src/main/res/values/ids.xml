@@ -14,4 +14,18 @@
     <item name="long_target" type="id" />
     <item name="web_content" type="id" />
     <item name="canvas_content" type="id" />
+    <item name="variant_distractor" type="id" />
+    <item name="variant_list" type="id" />
+    <item name="native_list" type="id" />
+    <item name="native_target" type="id" />
+    <item name="native_peer_a" type="id" />
+    <item name="native_peer_b" type="id" />
+    <item name="native_leaf" type="id" />
+    <item name="native_arm" type="id" />
+    <item name="native_recipient" type="id" />
+    <item name="native_account" type="id" />
+    <item name="native_amount" type="id" />
+    <item name="native_status" type="id" />
+    <item name="native_input" type="id" />
+    <item name="native_cover" type="id" />
 </resources>

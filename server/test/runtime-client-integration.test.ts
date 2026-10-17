@@ -7,13 +7,12 @@ import { runAgent } from "../src/runtime/index.js";
 
 type Json = Record<string, any>;
 type Screen = { title: string; controls: Json[] };
-type Step = { action: "tap" | "input_text" | "swipe" | "open_settings"; target?: string; text?: string; next: number; error?: "STALE_SNAPSHOT" };
+type Step = { action: "tap" | "input_text" | "swipe" | "open_settings"; target?: string; text?: string; next: number; error?: "STALE_SNAPSHOT" | "TARGET_CHANGED" };
 const model = { baseUrl: "https://synthetic-model.invalid/v1", apiKey: "synthetic-key", model: "fixture" };
 const control = (key: string, text: string, overrides: Json = {}): Json => ({ key, text, clickable: true, bounds: [40, 160, 300, 300], ...overrides });
 const success = (result: Json): BridgeResponse => ({ id: "synthetic", ok: true, result, meta: { durationMs: 1 } });
 const failure = (code: string): BridgeResponse => ({ id: "synthetic", ok: false,
   error: { code, message: "Synthetic fixture refusal", retryable: code === "STALE_SNAPSHOT" }, meta: { durationMs: 1 } });
-const contains = (bounds: number[], x: number, y: number) => x >= bounds[0]! && x < bounds[2]! && y >= bounds[1]! && y < bounds[3]!;
 
 /** Only the Android RPC endpoint is synthetic: production client/controller/runtime remain wired together. */
 class SyntheticPhone implements PhoneBridge {
@@ -22,7 +21,6 @@ class SyntheticPhone implements PhoneBridge {
   modelRound = 0;
   reads = 0;
   latest?: Json;
-  beforeRead?: (phone: SyntheticPhone) => void;
   readonly calls: { method: string; args: Json; round: number }[] = [];
   readonly assertions: unknown[] = [];
   private sequence = 0;
@@ -46,7 +44,7 @@ class SyntheticPhone implements PhoneBridge {
         clickable: false, scrollable: false, editable: false, enabled: true, password: false,
         visible: true, checkable: false, checked: false, selected: false, focused: false, ...value };
     });
-    this.latest = { snapshotId: `synthetic-session:${revision}`, revision, packageName: "synthetic.fixture", windowId: 4,
+    this.latest = { executor: "node-v1", snapshotId: `synthetic-session:${revision}`, revision, packageName: "synthetic.fixture", windowId: 4,
       truncated: false, nodes };
     return this.latest;
   }
@@ -58,7 +56,6 @@ class SyntheticPhone implements PhoneBridge {
       if (method === "get_ui_tree") {
         this.reads++;
         if (this.protected) return failure("PROTECTED_APP");
-        this.beforeRead?.(this);
         return success(this.snapshot());
       }
       assert.equal(method, "act_and_observe", "No metadata detours or alternate mutation RPCs are expected");
@@ -82,31 +79,30 @@ class SyntheticPhone implements PhoneBridge {
           assert.ok(target?.editable);
           assert.equal(target.contentDescription, step.target);
           assert.equal(actionArgs.text, step.text);
+        } else if (step.action === "tap") {
+          assert.equal(args.action, "tap_element", "The original node action must reach Android unchanged");
+          assert.deepEqual(Object.keys(actionArgs).sort(), ["nodeId", "snapshotId"], "No host-derived coordinates may enter a node action");
+          const target = this.latest.nodes.find((node: Json) => node.nodeId === actionArgs.nodeId);
+          assert.ok(target?.clickable);
+          assert.equal(target.text, step.target, "Only the model's observed semantic target may be submitted");
         } else {
-          assert.equal(args.action, "swipe", "tap_element must reach the phone as one verified touch");
-          if (step.action === "tap") {
-            assert.equal(actionArgs.startX, actionArgs.endX);
-            assert.equal(actionArgs.startY, actionArgs.endY);
-            const target = this.latest.nodes.find((node: Json) => node.text === step.target);
-            assert.ok(target?.clickable);
-            assert.ok(contains(target.bounds, actionArgs.startX, actionArgs.startY));
-            for (const other of this.latest.nodes.filter((node: Json) => node.clickable && node !== target)) {
-              assert.equal(contains(other.bounds, actionArgs.startX, actionArgs.startY), false,
-                "A partially overlapping control must never receive the derived touch");
-            }
-          } else {
-            assert.ok(Math.hypot(actionArgs.endX - actionArgs.startX, actionArgs.endY - actionArgs.startY) > 24);
-          }
+          assert.equal(args.action, "swipe");
+          assert.ok(Math.hypot(actionArgs.endX - actionArgs.startX, actionArgs.endY - actionArgs.startY) > 24);
         }
       }
       this.screen = step.next;
+      if (step.error === "TARGET_CHANGED") {
+        return { id: "synthetic", ok: false, error: { code: "TARGET_CHANGED", message: "Synthetic native context refusal", retryable: true,
+          details: { executor: "node-v1", dispatchState: "not_sent", reason: "PAGE_CONTEXT_CHANGED" } },
+          observation: this.snapshot(), meta: { durationMs: 1 } };
+      }
       if (step.error) {
         this.latest = undefined;
         return failure(step.error);
       }
       const observation = this.snapshot();
-      return success({ action: { accepted: true, action: args.action, revision: observation.revision,
-        ...(args.action === "swipe" ? { completion: "completed" } : {}) }, observation });
+      return success({ action: { accepted: true, executor: "node-v1", dispatchState: "sent", action: args.action, revision: observation.revision,
+        ...(["tap_element", "swipe"].includes(args.action) ? { completion: "completed" } : {}) }, observation });
     } catch (error) { this.assertions.push(error); throw error; }
   }
 
@@ -174,7 +170,7 @@ async function run(phone: SyntheticPhone, decide: (observation: Json | undefined
   } finally { await client.close(); }
 }
 
-test("runtime/client/controller navigate three pages, selecting an unoccluded part of a partially covered button", async () => {
+test("runtime/client/controller carry original node intents through three pages without host geometry or extra reads", async () => {
   const phone = new SyntheticPhone([
     { title: "合成首页", controls: [control("tools", "工具入口"), control("overlay", "浮层帮助", { bounds: [140, 180, 220, 280] })] },
     { title: "工具列表", controls: [control("battery", "电池信息")] },
@@ -187,11 +183,12 @@ test("runtime/client/controller navigate three pages, selecting an unoccluded pa
   });
   assert.equal(requests.length, 4, "Three actions plus completion; observations need no extra model turns");
   assert.equal(result.metrics.hostReads, 1);
-  assert.equal(result.metrics.preflightReads, 3);
+  assert.equal(result.metrics.preflightReads, 0);
   assert.equal(result.metrics.toolCalls, 5);
-  assert.deepEqual(phone.calls.map(call => call.method), ["get_ui_tree", "get_ui_tree", "act_and_observe", "get_ui_tree", "act_and_observe", "get_ui_tree", "act_and_observe", "get_ui_tree"]);
-  const point = phone.calls.find(call => call.method === "act_and_observe")!.args.arguments;
-  assert.notDeepEqual([point.startX, point.startY], [170, 230], "The blocked center is never dispatched");
+  assert.deepEqual(phone.calls.map(call => call.method), ["get_ui_tree", "act_and_observe", "act_and_observe", "act_and_observe", "get_ui_tree"]);
+  const originalTarget = phone.calls.find(call => call.method === "act_and_observe")!.args.arguments;
+  assert.deepEqual(originalTarget, { snapshotId: "synthetic-session:1", nodeId: "tools-1" },
+    "Even with a partial overlay, the host delegates the original target to Android; native geometry has separate Android coverage");
 });
 
 test("Chinese input, search and result navigation consume returned observations through all production layers", async () => {
@@ -213,8 +210,8 @@ test("Chinese input, search and result navigation consume returned observations 
   });
   assert.equal(result.metrics.modelRequests, 4);
   assert.equal(result.metrics.hostReads, 1);
-  assert.equal(result.metrics.preflightReads, 3);
-  assert.deepEqual(phone.calls.filter(call => call.method === "act_and_observe").map(call => call.args.action), ["input_text", "swipe", "swipe"]);
+  assert.equal(result.metrics.preflightReads, 0);
+  assert.deepEqual(phone.calls.filter(call => call.method === "act_and_observe").map(call => call.args.action), ["input_text", "tap_element", "tap_element"]);
 });
 
 test("an initially protected page offers only the explicit settings exit before normal navigation resumes", async () => {
@@ -234,7 +231,7 @@ test("an initially protected page offers only the explicit settings exit before 
   assert.equal(result.metrics.modelRequests, 3);
   assert.equal(result.metrics.hostReads, 1);
   assert.equal(events.filter(event => event.errorCode === "PROTECTED_APP").length, 1);
-  assert.deepEqual(phone.calls.map(call => call.method), ["get_ui_tree", "act_and_observe", "get_ui_tree", "act_and_observe", "get_ui_tree"]);
+  assert.deepEqual(phone.calls.map(call => call.method), ["get_ui_tree", "act_and_observe", "act_and_observe", "get_ui_tree"]);
 });
 
 test("a stale swipe gets one host read and a new model decision without automatic mutation replay", async () => {
@@ -255,21 +252,20 @@ test("a stale swipe gets one host read and a new model decision without automati
   });
   assert.equal(result.metrics.modelRequests, 3);
   assert.equal(result.metrics.hostReads, 2);
-  assert.equal(result.metrics.preflightReads, 1);
+  assert.equal(result.metrics.preflightReads, 0);
   assert.equal(events.filter(event => event.errorCode === "STALE_SNAPSHOT").length, 1);
   assert.deepEqual(phone.calls.map(call => [call.method, call.round]), [
-    ["get_ui_tree", 0], ["act_and_observe", 1], ["get_ui_tree", 1], ["get_ui_tree", 2], ["act_and_observe", 2],
+    ["get_ui_tree", 0], ["act_and_observe", 1], ["get_ui_tree", 1], ["act_and_observe", 2],
     ["get_ui_tree", 3],
   ]);
 });
 
-test("a real page-context change refuses the old intent and supplies the new UI for the next model decision", async () => {
+test("a native page-context refusal supplies fresh UI without host preflight or automatic mutation replay", async () => {
   const phone = new SyntheticPhone([
     { title: "旧合成页面", controls: [control("view", "查看详情")] },
     { title: "新合成页面", controls: [control("view", "查看详情")] },
     { title: "新页面详情", controls: [control("status", "新页面信息", { clickable: false })] },
-  ], [{ action: "tap", target: "查看详情", next: 2 }]);
-  phone.beforeRead = fixture => { if (fixture.reads === 2) fixture.screen = 1; };
+  ], [{ action: "tap", target: "查看详情", next: 1, error: "TARGET_CHANGED" }, { action: "tap", target: "查看详情", next: 2 }]);
   const seen: (string | undefined)[] = [];
   const { result, events } = await run(phone, observed => {
     seen.push(pageTitle(observed));
@@ -277,11 +273,11 @@ test("a real page-context change refuses the old intent and supplies the new UI 
   });
   assert.deepEqual(seen, ["旧合成页面", "新合成页面", "新页面详情"]);
   assert.equal(result.metrics.modelRequests, 3);
-  assert.equal(result.metrics.hostReads, 1, "The preflight-refusal observation avoids a recovery read; only the completion check reads again");
-  assert.equal(result.metrics.preflightReads, 2);
+  assert.equal(result.metrics.hostReads, 1, "The native-refusal observation avoids a recovery read; only the completion check reads again");
+  assert.equal(result.metrics.preflightReads, 0);
   assert.equal(events.filter(event => event.errorCode === "TARGET_CHANGED" && event.errorReason === "PAGE_CONTEXT_CHANGED").length, 1);
   assert.deepEqual(phone.calls.map(call => [call.method, call.round]), [
-    ["get_ui_tree", 0], ["get_ui_tree", 1], ["get_ui_tree", 2], ["act_and_observe", 2],
+    ["get_ui_tree", 0], ["act_and_observe", 1], ["act_and_observe", 2],
     ["get_ui_tree", 3],
   ]);
 });

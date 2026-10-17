@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { z } from "zod";
-import { phoneErrorSchema, type BridgeResponse, type PhoneBridge } from "./bridge.js";
+import { phoneResponseSchema, type BridgeResponse, type PhoneBridge } from "./bridge.js";
 import { AgentError, publicError } from "./errors.js";
 
 const exec = promisify(execFile);
@@ -22,11 +22,7 @@ const helloSchema = z.object({
   deviceId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/),
   deviceName: z.string().min(1).max(128).regex(/^[^\x00-\x1f\x7f]*$/),
 }).strict();
-const responseSchema = z.object({
-  id: z.string().min(1).max(128), ok: z.boolean(), result: z.unknown().optional(),
-  error: phoneErrorSchema.optional(),
-  meta: z.object({ durationMs: z.number().finite().nonnegative() }).strict(),
-}).strict().refine(value => value.ok ? !value.error && "result" in value : !!value.error && !("result" in value));
+const responseSchema = phoneResponseSchema;
 
 export type LANAddress = { address: string; name: string };
 export type WirelessState = {

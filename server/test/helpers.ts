@@ -21,6 +21,6 @@ export async function grant(prompt: ApprovalPrompt): Promise<Record<string, any>
 }
 
 export const snapshot = {
-  snapshotId: "session:1", revision: 1, windowId: 4, packageName: "com.android.settings", truncated: false,
+  executor: "node-v1", snapshotId: "session:1", revision: 1, windowId: 4, packageName: "com.android.settings", truncated: false,
   nodes: [{ nodeId: "n0", parentId: null, text: "电池", contentDescription: "Battery", resourceId: "android:id/title", className: "android.widget.TextView", bounds: [0, 50, 300, 100], clickable: true, scrollable: false, editable: false, enabled: true, password: false }],
 };
