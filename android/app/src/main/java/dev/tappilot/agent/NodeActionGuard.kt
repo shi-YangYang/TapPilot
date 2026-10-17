@@ -11,6 +11,12 @@ internal class NodeActionGuard(private val value: JSONObject) {
         fun contains(other: Box) = left <= other.left && top <= other.top && right >= other.right && bottom >= other.bottom
     }
     internal data class Touch(val targetNodeId: String, val actedNodeId: String, val x: Int, val y: Int)
+    /** Fixed structural facts only; never include labels, handles or signatures. */
+    internal data class ContextChange(val region: String, val kind: String, val changedNodes: Int,
+        val targetMatched: Boolean, val actionTargetMatched: Boolean) {
+        fun toJson(): JSONObject = JSONObject().put("region", region).put("kind", kind).put("changedNodes", changedNodes)
+            .put("targetMatched", targetMatched).put("actionTargetMatched", actionTargetMatched)
+    }
     private val nodes = value.getJSONArray("nodes").let { array -> (0 until array.length()).map { array.getJSONObject(it) } }
     private val byId = nodes.associateBy { it.getString("nodeId") }
     private val children = nodes.filter { !it.isNull("parentId") }.groupBy { it.getString("parentId") }
@@ -207,9 +213,64 @@ internal class NodeActionGuard(private val value: JSONObject) {
         if (candidates.size != 1) changed("TARGET_AMBIGUOUS")
         val rebound = candidates.single()
         if (allowed.isNotEmpty()) {
-            if (!declaredLabelContext(fresh, allowed, rebound, action)) changed("PAGE_CONTEXT_CHANGED")
-        } else if (context() != fresh.context() && !independentContext(fresh, selected, rebound, action)) changed("PAGE_CONTEXT_CHANGED")
+            if (!declaredLabelContext(fresh, allowed, rebound, action)) contextChanged(fresh, selected, rebound, action)
+        } else if (context() != fresh.context() && !independentContext(fresh, selected, rebound, action)) contextChanged(fresh, selected, rebound, action)
         return fresh.id(rebound)
+    }
+    private fun contextChanged(fresh: NodeActionGuard, selected: JSONObject, rebound: JSONObject, action: String): Nothing =
+        throw AgentError("TARGET_CHANGED", "The intended target or its relevant page context changed. No action was sent.", true, "PAGE_CONTEXT_CHANGED")
+            .also { it.nativeContextChange = contextChange(fresh, selected, rebound, action) }
+
+    /** This runs only after unique target/action signature matching. Positional
+     * comparisons establish a location only when the entire native topology and
+     * target correspondence align; a replaced branch yields unknown evidence.
+     * These facts describe location, never whether a changed label is safe.
+     */
+    private fun contextChange(fresh: NodeActionGuard, selected: JSONObject, rebound: JSONObject, action: String): ContextChange {
+        val unknownStructure = ContextChange("unknown", "structure", 0, false, false)
+        val pairs = mutableListOf<Pair<JSONObject, JSONObject>>()
+        fun align(old: JSONObject, current: JSONObject): Boolean {
+            val oldChildren = children[id(old)] ?: emptyList()
+            val newChildren = fresh.children[fresh.id(current)] ?: emptyList()
+            if (old.getString("className") != current.getString("className") || old.getString("resourceId") != current.getString("resourceId") || oldChildren.size != newChildren.size) return false
+            pairs.add(old to current)
+            return oldChildren.indices.all { align(oldChildren[it], newChildren[it]) }
+        }
+        if (!align(root, fresh.root) || pairs.none { it.first === selected && it.second === rebound }) return unknownStructure
+        val acted = if (action in clickActions) actual(selected) else selected
+        val newActed = if (action in clickActions) fresh.actual(rebound) else rebound
+        if (pairs.none { it.first === acted && it.second === newActed }) return unknownStructure
+        fun sameBounds(old: JSONObject, current: JSONObject): Boolean {
+            val a = old.getJSONArray("bounds"); val b = current.getJSONArray("bounds")
+            return a.length() == 4 && b.length() == 4 && (0 until 4).all { a.getInt(it) == b.getInt(it) }
+        }
+        fun matched(target: JSONObject): Boolean = pairs.filter { descends(it.first, target) || descends(target, it.first) }
+            .all { (old, current) -> own(old) == fresh.own(current) && sameBounds(old, current) }
+        val regions = mutableSetOf<String>(); val kinds = mutableSetOf<String>(); var changedNodes = 0
+        // A ScrollView groups form controls, not independent collection rows.
+        val targetItem = listItem(selected)?.takeIf { it.second.getString("className") in collectionClasses }
+        for ((old, current) in pairs) {
+            val nodeKinds = mutableSetOf<String>()
+            if (old.getString("text") != current.getString("text") || old.getString("contentDescription") != current.getString("contentDescription")) nodeKinds.add("content")
+            if (stateFields.any { old.getBoolean(it) != current.getBoolean(it) } || old.optBoolean("contextProtected") != current.optBoolean("contextProtected")) nodeKinds.add("state")
+            // This digest covers several native semantics. It is not evidence
+            // that only visible text changed, and the digest itself stays private.
+            if (old.optString("contextSignature") != current.optString("contextSignature")) nodeKinds.add("unknown")
+            if (!sameBounds(old, current)) nodeKinds.add("geometry")
+            if (nodeKinds.isEmpty()) continue
+            changedNodes++; kinds.addAll(nodeKinds)
+            regions.add(when {
+                old === selected -> "target"
+                descends(selected, old) -> "ancestor"
+                descends(old, acted) -> "target_descendant"
+                else -> {
+                    val item = listItem(old)
+                    if (targetItem != null && item?.second === targetItem.second && item.first !== targetItem.first) "peer_item" else "outside_target"
+                }
+            })
+        }
+        return ContextChange(if (regions.size > 1) "mixed" else regions.singleOrNull() ?: "unknown",
+            if (kinds.size > 1) "mixed" else kinds.singleOrNull() ?: "unknown", changedNodes, matched(selected), matched(acted))
     }
     /** Factual, bounded diagnostics only: changed labels are not permission to ignore them.
      * Handles refer to the fresh observation; no prior text is exposed. Mixed

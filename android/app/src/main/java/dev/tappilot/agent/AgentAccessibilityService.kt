@@ -532,7 +532,7 @@ class AgentAccessibilityService : AccessibilityService() {
                     observation.put("changedLabelNodeIds", JSONArray(changed))
                     throw AgentError(error.code,
                         "The target still matches, but labels identified by observation.changedLabelNodeIds changed. No action was sent. Inspect their meaning; only unrelated status labels may be explicitly declared in allowedLabelChanges. Never exempt recipients, accounts or amounts.",
-                        error.retryable, error.reason)
+                        error.retryable, error.reason).also { it.nativeContextChange = error.nativeContextChange }
                 }
             }
             throw error

@@ -19,10 +19,12 @@ internal class AgentError(val code: String, override val message: String, val re
     // Set only by the native node command before any mutation API is called.
     internal var nativeNotSent = false
     internal var nativeObservation: JSONObject? = null
+    internal var nativeContextChange: NodeActionGuard.ContextChange? = null
     fun toJson(): JSONObject = JSONObject().put("code", code).put("message", message.take(2048)).put("retryable", retryable).also {
         if (nativeNotSent) {
             val details = JSONObject().put("executor", NodeActionGuard.EXECUTOR).put("dispatchState", "not_sent")
             if (reason != null && reason in nativeReasons) details.put("reason", reason)
+            if (code == "TARGET_CHANGED" && reason == "PAGE_CONTEXT_CHANGED") nativeContextChange?.let { evidence -> details.put("contextChange", evidence.toJson()) }
             it.put("details", details)
         } else if (code == "STALE_SNAPSHOT" && SnapshotStaleReason.entries.any { entry -> entry.name == reason }) {
             it.put("details", JSONObject().put("reason", reason))

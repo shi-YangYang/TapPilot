@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, symlink, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -18,6 +18,9 @@ import { runAgent } from "../src/runtime/index.js";
 import type { FailureEpisode } from "../src/skills/trace.js";
 import type { BridgeResponse } from "../src/bridge.js";
 import { evaluateSkill, type SkillReceipt } from "../src/skills/evaluation.js";
+import { RuntimeError, type ModelFetch } from "../src/runtime/model.js";
+import { SkillFailureSchema, type SkillFailure } from "../src/skills/failure.js";
+import { startSkillWorker } from "./fixtures/skills-worker-helper.js";
 
 const secret="PRIVATE-password-chat-验证码";
 const model={baseUrl:"https://skill-loop.invalid/v1",model:"fixture",apiKey:secret};
@@ -28,14 +31,15 @@ const step=compactTrace({index:1,before,after:before,targetNodeId:"private-targe
 const episode=(nodeCount=1)=>createEpisode({scope,trigger:{actionKind:diagnostic.actionKind,errorCode:diagnostic.errorCode,reason:diagnostic.reason},steps:[{...step,after:{...step.after,nodeCount}}],termination:"failed",appliedSkillHashes:[]});
 const spec=(expiresAt=Date.now()+86_400_000):SkillSpec=>({schemaVersion:1,scope,trigger:episode().trigger,entryConditions:[],program:{entry:0,nodes:[{kind:"step",operation:{op:"inspect",aspect:"hierarchy"},next:1},{kind:"end",outcome:"continue"}]},lineage:{negativeFeedback:[]},basis:"hypothesis",expiresAt});
 const withStore=async(work:(store:SkillStore,root:string)=>Promise<void>)=>{const root=await mkdtemp(join(tmpdir(),"tappilot-skill-loop-"));try{await work(new SkillStore(root),root);}finally{await rm(root,{recursive:true,force:true});}};
+const persistedText=async(store:SkillStore)=>(await Promise.all((await readdir(store.directory)).filter(name=>name.startsWith("skills.sqlite3")).map(name=>readFile(join(store.directory,name),"utf8")))).join("");
 
 test("private ledger accepts only sanitized structure, deduplicates evidence and rejects symlinks",async()=>withStore(async(store,root)=>{
   const first=episode();await assert.rejects(store.recordEpisode({...first,task:secret}),/SKILLS_INVALID_EPISODE/);
   const queued=await store.recordEpisode(first);assert.equal(queued.queued,true);
   assert.equal((await store.recordEpisode({...first,id:randomUUID(),createdAt:Date.now()+1})).queued,false);
-  const text=await readFile(join(store.directory,"state.json"),"utf8");assert.equal(text.includes(secret),false);assert.equal(text.includes("private.app"),false);
-  assert.equal((await stat(store.directory)).mode&0o777,0o700);assert.equal((await stat(join(store.directory,"state.json"))).mode&0o777,0o600);
-  await unlink(join(store.directory,"state.json"));await symlink(join(root,"outside"),join(store.directory,"state.json"));
+  const text=await persistedText(store);assert.equal(text.includes(secret),false);assert.equal(text.includes("private.app"),false);
+  assert.equal((await stat(store.directory)).mode&0o777,0o700);assert.equal((await stat(join(store.directory,"skills.sqlite3"))).mode&0o777,0o600);
+  await unlink(join(store.directory,"skills.sqlite3"));await symlink(join(root,"outside"),join(store.directory,"skills.sqlite3"));
   await assert.rejects(store.recordEpisode(episode(2)),/SKILLS_UNSAFE_STORAGE/);
 }));
 
@@ -57,11 +61,44 @@ test("job budgets are durable and repeated evidence cannot bypass them",async()=
   assert.equal((await store.status()).dailyJobs,2);assert.equal((await store.status()).dailyModelCalls,100);
 }));
 
-test("dead write locks recover and crashed jobs do not replay after restart",async()=>withStore(async(store,root)=>{
-  const queued=await store.recordEpisode(episode());await store.beginJob(scope.modelProfile);
-  const path=join(store.directory,"state.json"),raw=JSON.parse(await readFile(path,"utf8"));raw.jobs[0].ownerPid=2_147_483_647;
-  await writeFile(path,JSON.stringify(raw),{mode:0o600});
-  await writeFile(join(store.directory,".write-lock"),JSON.stringify({pid:2_147_483_647,token:randomUUID()}),{mode:0o600});
+test("native jobs allow exactly 150 calls while concurrent reservations preserve the daily 200 cap",async()=>withStore(async(store,root)=>{
+  const now=Date.now(),first=await store.recordEpisode(episode(),now);assert.ok(await store.beginJob(scope.modelProfile,now));
+  for(const invalid of [0,101,151,200,Infinity,NaN,"150"]){
+    await assert.rejects(store.reserveModelCall(first.id,now,invalid as 150),/SKILLS_INVALID_BUDGET/);
+  }
+  assert.equal((await store.status(now)).dailyModelCalls,0);
+  for(let index=0;index<150;index++)await store.reserveModelCall(first.id,now,150);
+  await assert.rejects(store.reserveModelCall(first.id,now,150),/SKILLS_BUDGET_EXHAUSTED/);
+  await store.finishJob(first.id,"exhausted",now);
+  const second=await store.recordEpisode(episode(2),now);assert.ok(await store.beginJob(scope.modelProfile,now));
+  const reloaded=new SkillStore(root);
+  const calls=await Promise.allSettled(Array.from({length:55},(_,index)=>(index%2?store:reloaded).reserveModelCall(second.id,now,150)));
+  assert.equal(calls.filter(call=>call.status==="fulfilled").length,50);
+  const rejected=calls.filter(call=>call.status==="rejected");assert.equal(rejected.length,5);
+  assert.ok(rejected.every(call=>call.status==="rejected"&&call.reason.message==="SKILLS_BUDGET_EXHAUSTED"));
+  assert.equal((await reloaded.status(now)).dailyModelCalls,200);
+  assert.deepEqual((await reloaded.history()).jobs.map(job=>job.modelCalls),[150,50]);
+}));
+
+test("the loop selects only the fixed native or default model-call budget",async()=>{
+  for(const native of [false,true])await withStore(async(_store,root)=>{
+    const budgets:number[]=[];
+    class BudgetStore extends SkillStore{
+      override async reserveModelCall(jobId:string,now=Date.now(),budget:100|150=100){budgets.push(budget);return super.reserveModelCall(jobId,now,budget);}
+    }
+    const store=new BudgetStore(root);await store.recordEpisode(episode());
+    const loop=new ContinuousImprover({store,resolveModel:()=>model,...(native?{android:{serial:"emulator-5580",adbPath:"/must-not-run-adb"}}:{}),
+      modelFetch:async()=>{throw new RuntimeError("MODEL_TIMEOUT","synthetic stop before evaluation");}});
+    loop.schedule();await loop.waitForIdle();
+    assert.deepEqual(budgets,[native?150:100]);
+    assert.equal((await store.status()).dailyModelCalls,1);
+  });
+});
+
+test("crashed job owners are recovered without replay after restart",async()=>withStore(async(store,root)=>{
+  const queued=await store.recordEpisode(episode());
+  const worker=await startSkillWorker(root,"claim",{modelProfile:scope.modelProfile,now:Date.now()});
+  try{assert.equal((await worker.run()).id,queued.id);}finally{await worker.kill();}
   const restarted=new SkillStore(root);await restarted.recoverInterrupted();assert.equal(await restarted.beginJob(scope.modelProfile),undefined);
   assert.equal((await restarted.history()).jobs.find(j=>j.id===queued.id)?.state,"interrupted");
   assert.equal((await restarted.recordEpisode(episode())).queued,false);
@@ -77,13 +114,51 @@ test("foreground pause aborts even an uncooperative request; stop clears pending
   assert.equal((await store.loadSnapshot(scope)).length,0);
 }));
 
-test("failed generation ends the job without repeated model calls or storing response prose",async()=>withStore(async(store)=>{
+test("failed generation allows one format correction then ends without requeue or storing response prose",async()=>withStore(async(store)=>{
   await store.recordEpisode(episode());let calls=0;
   const loop=new ContinuousImprover({store,resolveModel:()=>model,modelFetch:async()=>{calls++;return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{role:"assistant",content:JSON.stringify({instructions:secret})}}]}));}});
-  loop.schedule();await loop.waitForIdle();assert.equal(calls,1);assert.equal((await loop.status()).phase,"rejected");
-  loop.schedule();await loop.waitForIdle();assert.equal(calls,1);
-  assert.equal((await readFile(join(store.directory,"state.json"),"utf8")).includes(secret),false);
+  loop.schedule();await loop.waitForIdle();assert.equal(calls,2);assert.equal((await loop.status()).phase,"rejected");
+  loop.schedule();await loop.waitForIdle();assert.equal(calls,2);
+  assert.equal((await persistedText(store)).includes(secret),false);
   assert.equal((await store.history()).jobs[0]?.state,"rejected");
+  assert.deepEqual((await store.status()).lastFailure,{stage:"generation",code:"SKILL_INVALID_PROPOSAL"});
+}));
+
+test("generation preserves safe timeout, connection and HTTP causes across restart without private messages",async()=>{
+  const cases:{fetch:ModelFetch;failure:SkillFailure}[]=[
+    {fetch:async()=>{throw new Error(secret);},failure:{stage:"generation",code:"MODEL_CONNECTION_FAILED"}},
+    {fetch:async()=>new Response(secret,{status:429}),failure:{stage:"generation",code:"MODEL_HTTP_ERROR",httpStatus:429}},
+    {fetch:async()=>new Response(new ReadableStream({start(controller){controller.error(new RuntimeError("MODEL_TIMEOUT",secret));}})),failure:{stage:"generation",code:"MODEL_TIMEOUT"}},
+    {fetch:async()=>new Response(secret),failure:{stage:"generation",code:"MODEL_INVALID_RESPONSE"}},
+  ];
+  for(const item of cases)await withStore(async(store,root)=>{
+    await store.recordEpisode(episode());let calls=0;
+    const loop=new ContinuousImprover({store,resolveModel:()=>model,modelFetch:async(...args)=>{calls++;return item.fetch(...args);}});
+    loop.schedule();await loop.waitForIdle();assert.equal(calls,1);
+    assert.deepEqual((await store.history()).jobs[0]?.lastFailure,item.failure);
+    const restarted=new ContinuousImprover({store:new SkillStore(root),resolveModel:()=>undefined});
+    assert.deepEqual((await restarted.status()).lastFailure,item.failure);
+    assert.equal((await restarted.status()).lastReason,"generation_failed");
+    assert.equal((await persistedText(store)).includes(secret),false);
+  });
+  assert.equal(SkillFailureSchema.safeParse({stage:"generation",code:secret}).success,false);
+  assert.equal(SkillFailureSchema.safeParse({stage:"generation",code:"MODEL_TIMEOUT",message:secret}).success,false);
+  assert.equal(SkillFailureSchema.safeParse({stage:"generation",code:"MODEL_TIMEOUT",httpStatus:429}).success,false);
+});
+
+test("rejected evaluation keeps its precise stage and reason instead of generation failure",async()=>withStore(async(store,root)=>{
+  const incomplete=episode();incomplete.steps[0]!.before.complete="unknown";
+  await store.recordEpisode(incomplete);let proposals=0;
+  const loop=new ContinuousImprover({store,resolveModel:()=>model,modelFetch:async()=>{
+    const aspect=++proposals===1?"hierarchy":"context";
+    return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{role:"assistant",content:JSON.stringify({entryConditions:[],program:{entry:0,nodes:[
+      {kind:"step",operation:{op:"inspect",aspect},next:1},{kind:"end",outcome:"stop"}]}})}}]}));
+  }});
+  loop.schedule();await loop.waitForIdle();assert.equal(proposals,2);
+  const failure={stage:"evaluation",code:"SKILLS_UNREPRODUCIBLE"};
+  assert.deepEqual((await store.history()).jobs[0]?.lastFailure,failure);
+  assert.deepEqual((await new ContinuousImprover({store:new SkillStore(root),resolveModel:()=>undefined}).status()).lastFailure,failure);
+  assert.equal((await loop.status()).lastReason,"evaluation_rejected");
 }));
 
 test("a new failed adopted-skill identity is new evidence, but same skill failure deduplicates",async()=>withStore(async(store)=>{
@@ -97,7 +172,7 @@ function recoveryFetch(onProposal?:(body:any)=>void, firstBad=false){
   let call=0,proposals=0;
   return async(_url:string,init:RequestInit)=>{
     const body=JSON.parse(String(init.body));
-    if(!body.tools){onProposal?.(body);if(firstBad&&++proposals===1)return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{role:"assistant",content:JSON.stringify({entryConditions:[],program:{entry:0,nodes:[{kind:"step",operation:{op:"inspect",aspect:"hierarchy"},next:1},{kind:"end",outcome:"stop"}]}})}}]}));return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{role:"assistant",content:JSON.stringify({entryConditions:[],program:{entry:0,nodes:[
+    if(!body.tools||body.tools.length===1&&body.tools[0]?.function?.name==="propose_skill"){onProposal?.(body);if(firstBad&&++proposals===1)return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{role:"assistant",content:JSON.stringify({entryConditions:[],program:{entry:0,nodes:[{kind:"step",operation:{op:"inspect",aspect:"hierarchy"},next:1},{kind:"end",outcome:"stop"}]}})}}]}));return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{role:"assistant",content:JSON.stringify({entryConditions:[],program:{entry:0,nodes:[
       {kind:"step",operation:{op:"discard_stale_target"},next:1},{kind:"step",operation:{op:"observe",mode:"reuse_latest"},next:2},
       {kind:"step",operation:{op:"resolve_target",capability:"clickable",maxAncestorHops:1},next:3},{kind:"end",outcome:"continue"}]}})}}]}));}
     let tree:any;

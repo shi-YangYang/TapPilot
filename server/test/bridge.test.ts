@@ -104,7 +104,8 @@ test("emergency gate prevents dispatch after delayed ADB setup and immediately b
 
 test("USB preserves native not-sent evidence and observation only in the strict refusal envelope", async () => {
   const error = { code: "TARGET_CHANGED", message: "Synthetic target changed", retryable: true,
-    details: { executor: "node-v1", dispatchState: "not_sent", reason: "PAGE_CONTEXT_CHANGED" } };
+    details: { executor: "node-v1", dispatchState: "not_sent", reason: "PAGE_CONTEXT_CHANGED",
+      contextChange: { region: "outside_target", kind: "content", changedNodes: 1, targetMatched: true, actionTargetMatched: true } } };
   const observation = { executor: "node-v1", snapshotId: "synthetic:2", nodes: [] };
   const f = await fixture((socket, request) => socket.end(JSON.stringify({ id: request.id, ok: false, error, observation, meta: { durationMs: 1 } }) + "\n"));
   try {
@@ -116,6 +117,11 @@ test("USB preserves native not-sent evidence and observation only in the strict 
     { ...error, details: { ...error.details, reason: "private text" } },
     { ...error, details: { ...error.details, dispatchState: "sent" } },
     { ...error, details: { ...error.details, rawLabel: "private text" } },
+    { ...error, details: { ...error.details, contextChange: { ...error.details.contextChange, label: "private text" } } },
+    { ...error, details: { ...error.details, contextChange: { ...error.details.contextChange, changedNodes: 501 } } },
+    { ...error, details: { ...error.details, contextChange: { ...error.details.contextChange, region: "private text" } } },
+    { ...error, details: { ...error.details, reason: "TARGET_IDENTITY_CHANGED" } },
+    { ...error, code: "NODE_NOT_ACTIONABLE" },
     { ...error, code: "BRIDGE_TIMEOUT" },
     { ...error, details: undefined },
   ]) {

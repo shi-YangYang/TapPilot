@@ -58,6 +58,8 @@ export const DiagnosticEventSchema = z.object({
   timestamp: z.number().int().min(0).max(8_640_000_000_000_000),
   stepIndex: count,
   actionKind: ActionKindSchema,
+  // Set only from the common controller's validated native refusal envelope.
+  executor: z.literal("node-v1").optional(),
   outcome: z.enum(["success", "failure", "cancelled", "unknown"]),
   // Program termination is distinct from an independently verified task result.
   runStatus: z.enum(["completed", "failed", "cancelled"]).optional(),

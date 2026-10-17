@@ -307,4 +307,58 @@ class NodeActionGuardTest {
         assertEquals(setOf("executor", "dispatchState", "reason"), details.keys().asSequence().toSet())
         assertEquals("not_sent", details.getString("dispatchState")); assertEquals("node-v1", details.getString("executor"))
     }
+    private fun contextError(previous: JSONObject, fresh: JSONObject, action: String = "input_text", target: String = "field", allowances: List<String> = emptyList()): AgentError {
+        try { NodeActionGuard(previous).rebind(NodeActionGuard(fresh), target, action, allowances) }
+        catch (error: AgentError) { assertEquals("PAGE_CONTEXT_CHANGED", error.reason); return error }
+        throw AssertionError("Expected a native page-context refusal")
+    }
+    @Test fun contextEvidenceCountsOutsideLabelsWithoutPersistingTheirIdentityOrMeaning() {
+        val error = contextError(form(), changed(form(1)))
+        val evidence = error.nativeContextChange!!
+        assertEquals(NodeActionGuard.ContextChange("outside_target", "content", 1, true, true), evidence)
+        // An unannotated recipient change has the same structural evidence.
+        // Neither location nor this diagnostic ever declares it harmless.
+        val recipient = changed(form()); n(recipient, "recipient").put("text", "Private synthetic recipient B")
+        assertEquals(evidence, contextError(form(), recipient).nativeContextChange)
+        error.nativeNotSent = true
+        val details = error.toJson().getJSONObject("details")
+        assertEquals(setOf("executor", "dispatchState", "reason", "contextChange"), details.keys().asSequence().toSet())
+        assertEquals(setOf("region", "kind", "changedNodes", "targetMatched", "actionTargetMatched"), details.getJSONObject("contextChange").keys().asSequence().toSet())
+        for (privateValue in listOf("Status", "field", "recipient", "fixture", "bounds", "contextSignature")) assertFalse(details.toString().contains(privateValue))
+        error.nativeNotSent = false
+        assertFalse(error.toJson().has("details"))
+    }
+    @Test fun contextEvidenceDistinguishesNativeSemanticsStateAndMixedChanges() {
+        val semantic = changed(form()); n(semantic, "recipient").put("contextSignature", "private-native-digest")
+        assertEquals("unknown", contextError(form(), semantic).nativeContextChange!!.kind)
+        val state = changed(form()); n(state, "status").put("selected", true)
+        assertEquals("state", contextError(form(), state).nativeContextChange!!.kind)
+        val mixed = changed(form(1)); n(mixed, "save").put("enabled", false)
+        assertEquals(NodeActionGuard.ContextChange("outside_target", "mixed", 2, true, true), contextError(form(), mixed).nativeContextChange)
+    }
+    @Test fun contextEvidenceDoesNotClaimMatchedGeometryOrReplacedTopology() {
+        val shifted = changed(form(1)); n(shifted, "field").put("bounds", JSONArray(listOf(0, 301, 400, 351)))
+        assertEquals(NodeActionGuard.ContextChange("mixed", "mixed", 2, false, false), contextError(form(), shifted).nativeContextChange)
+        val replaced = changed(form(1)); n(replaced, "status").put("resourceId", "fixture:id/replaced")
+        assertEquals(NodeActionGuard.ContextChange("unknown", "structure", 0, false, false), contextError(form(), replaced).nativeContextChange)
+    }
+    @Test fun contextEvidenceRequiresSelectedAndActualNodeCorrespondence() {
+        val old = tree(); val fresh = changed(tree("Tick 2")); val a = fresh.getJSONArray("nodes")
+        fresh.put("nodes", JSONArray(listOf(a.getJSONObject(0), a.getJSONObject(1), a.getJSONObject(4), a.getJSONObject(5), a.getJSONObject(2), a.getJSONObject(3))))
+        assertEquals(NodeActionGuard.ContextChange("unknown", "structure", 0, false, false), contextError(old, fresh, "tap_element", "target").nativeContextChange)
+        val targetChanged = changed(form()); n(targetChanged, "field").put("text", "Changed input identity")
+        try { NodeActionGuard(form()).rebind(NodeActionGuard(targetChanged), "field", "input_text"); fail("Expected changed identity") }
+        catch (error: AgentError) { assertEquals("TARGET_IDENTITY_CHANGED", error.reason); assertNull(error.nativeContextChange) }
+    }
+    @Test fun contextEvidenceAcceptsRenewedHandlesAndIdentifiesPeerContent() {
+        val previous = form(); val fresh = changed(form(1)); val array = fresh.getJSONArray("nodes")
+        for (i in 0 until array.length()) {
+            val node = array.getJSONObject(i); node.put("nodeId", "fresh-${node.getString("nodeId")}")
+            if (!node.isNull("parentId")) node.put("parentId", "fresh-${node.getString("parentId")}")
+        }
+        assertEquals(NodeActionGuard.ContextChange("outside_target", "content", 1, true, true), contextError(previous, fresh).nativeContextChange)
+        val oldList = tree(); n(oldList, "peerLabel").put("contextProtected", true)
+        val freshList = changed(oldList); n(freshList, "peerLabel").put("text", "Changed protected peer")
+        assertEquals(NodeActionGuard.ContextChange("peer_item", "content", 1, true, true), contextError(oldList, freshList, "click_element", "targetLabel").nativeContextChange)
+    }
 }

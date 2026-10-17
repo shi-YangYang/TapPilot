@@ -24,7 +24,7 @@ const knownErrors = new Set([
 const fail = code => { const error = new Error(code); error.code = code; throw error; };
 
 function argumentsOf(argv) {
-  let profile, checkModel = false;
+  let profile, checkModel = false, learning = false;
   const forwarded = [];
   for (let index = 0; index < argv.length; index++) {
     if (argv[index] === '--profile') {
@@ -33,15 +33,18 @@ function argumentsOf(argv) {
     } else if (argv[index] === '--check-model') {
       if (checkModel) fail('INVALID_ARGUMENT');
       checkModel = true;
+    } else if (argv[index] === '--learning-rehearsal') {
+      if (learning) fail('INVALID_ARGUMENT');
+      learning = true;
     } else forwarded.push(argv[index]);
   }
-  if (checkModel && forwarded.length) fail('INVALID_ARGUMENT');
-  if (!checkModel) {
+  if (checkModel && (forwarded.length || learning)) fail('INVALID_ARGUMENT');
+  if (!checkModel && !learning) {
     const modeIndex = forwarded.indexOf('--mode');
     if (modeIndex !== -1 && forwarded[modeIndex + 1] !== 'model') fail('INVALID_ARGUMENT');
     if (modeIndex === -1) forwarded.push('--mode', 'model');
   }
-  return { profile, checkModel, forwarded };
+  return { profile, checkModel, learning, forwarded };
 }
 
 let defaultProfile, temporaryUserData;
@@ -86,7 +89,7 @@ async function run() {
   }
   network = session.fromPartition(`tappilot-android-eval-${randomUUID()}`, { cache: false });
   const modelFetch = createModelFetch(network);
-  const { main } = await import('../../scripts/testbed-eval.mjs');
+  const { main } = args.learning ? await import('../../scripts/skill-learning-rehearsal.mjs') : await import('../../scripts/testbed-eval.mjs');
   await main(args.forwarded, { model, modelFetch, signal: controller.signal });
 }
 

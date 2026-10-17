@@ -9,6 +9,10 @@ import { modelScope } from "../learning/schema.js";
 import type { ModelConfig, ModelFetch } from "../runtime/model.js";
 import { SkillSpecSchema, SkillHashSchema, SkillFeedbackSchema, SKILL_POLICY_REVISION, skillHash, type SkillSpec, type SkillFeedback } from "./schema.js";
 import { FailureEpisodeSchema, episodeFingerprint, type FailureEpisode, type TraceStep } from "./trace.js";
+import { evaluateAndroidSkill, AndroidSkillEvaluationError, type AndroidSkillTarget, type AndroidSkillCaseEvent } from "./android-evaluation.js";
+import { SkillTrainingFeedbackSchema, type SkillTrainingFeedback } from "./training-feedback.js";
+import { RuntimeError } from "../runtime/model.js";
+import { skillModelFailureCode } from "./failure.js";
 
 export const SKILL_EVALUATOR_VERSION = "structural-recovery-1";
 export const SKILL_FIXTURE_MODEL: ModelConfig = { baseUrl: "https://eval.invalid/v1", apiKey: "fixture", model: "observed-policy" };
@@ -20,7 +24,8 @@ export const SkillValidationSchema = z.object({
   baselineGoals: count, candidateGoals: count, baselineRequests: count, candidateRequests: count,
   trainApplications: count, holdoutApplications: count, caseCount: count, repetitions: z.literal(3),
   // This certifies a local abstract recovery contract, never the original private task.
-  contract: z.literal("structural_recovery"), incumbentHashes: z.array(SkillHashSchema).max(3),
+  contract: z.enum(["structural_recovery", "android_recovery"]), incumbentHashes: z.array(SkillHashSchema).max(3),
+  androidSuite: z.enum(["native-label-recovery-1", "native-label-recovery-2"]).optional(),
 }).strict();
 export type SkillValidation = z.infer<typeof SkillValidationSchema>;
 declare const receiptBrand: unique symbol;
@@ -29,10 +34,24 @@ const receipts = new WeakMap<object, { validation: SkillValidation; candidate: s
 const digest = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export class SkillEvaluationError extends Error {
   readonly feedback: SkillFeedback;
-  constructor(readonly code: string, spec: SkillSpec, metric: SkillFeedback["metric"] = "unknown") {
+  readonly evaluationFeedback?: SkillTrainingFeedback;
+  constructor(readonly code: string, spec: SkillSpec, metric: SkillFeedback["metric"] = "unknown", evaluationFeedback?: SkillTrainingFeedback) {
     super(code);
-    this.feedback = SkillFeedbackSchema.parse({ skillHash: skillHash(spec), outcome: code === "SKILLS_NO_IMPROVEMENT" ? "no_improvement" : code === "SKILLS_REGRESSION" ? "regression" : "evaluation_rejected",
+    this.feedback = SkillFeedbackSchema.parse({ skillHash: skillHash(spec), outcome: ["SKILLS_NO_IMPROVEMENT", "SKILLS_ANDROID_NO_IMPROVEMENT"].includes(code) ? "no_improvement"
+      : ["SKILLS_REGRESSION", "SKILLS_ANDROID_REGRESSION"].includes(code) ? "regression" : "evaluation_rejected",
       errorCode: spec.trigger.errorCode, reason: spec.trigger.reason, metric });
+    if (evaluationFeedback) {
+      const parsed = SkillTrainingFeedbackSchema.parse(evaluationFeedback);
+      const reason = code === "SKILLS_ANDROID_NO_IMPROVEMENT" ? "no_improvement" : code === "SKILLS_ANDROID_NOT_APPLIED" ? "not_applied"
+        : code === "SKILLS_ANDROID_REGRESSION" ? "regression" : undefined;
+      if (parsed.skillHash !== this.feedback.skillHash || parsed.reason !== reason) throw new Error("SKILLS_FEEDBACK_MISMATCH");
+      this.evaluationFeedback = parsed;
+    }
+  }
+  static fromAndroid(error: unknown, spec: SkillSpec): SkillEvaluationError | undefined {
+    if (!(error instanceof RuntimeError) || !["SKILLS_ANDROID_NO_IMPROVEMENT", "SKILLS_ANDROID_NOT_APPLIED", "SKILLS_ANDROID_UNREPRODUCIBLE", "SKILLS_ANDROID_REGRESSION"].includes(error.code)) return undefined;
+    return new SkillEvaluationError(error.code, spec, error instanceof AndroidSkillEvaluationError ? error.metric : "unknown",
+      error instanceof AndroidSkillEvaluationError ? error.evaluationFeedback : undefined);
   }
 }
 export function verifySkillReceipt(candidate: SkillSpec, episode: FailureEpisode, receipt: unknown): SkillValidation {
@@ -41,7 +60,13 @@ export function verifySkillReceipt(candidate: SkillSpec, episode: FailureEpisode
   if (!proof || proof.candidate !== skillHash(spec) || proof.episode !== episodeFingerprint(trace)
     || proof.validation.modelProfile !== spec.scope.modelProfile || proof.validation.hostVersion !== spec.scope.hostVersion
     || spec.expiresAt <= Date.now()) throw new Error("SKILLS_UNTRUSTED_RECEIPT");
+  if (requiresAndroidEvaluation(spec, trace) && (proof.validation.contract !== "android_recovery" || !proof.validation.androidSuite)) throw new Error("SKILLS_UNTRUSTED_RECEIPT");
   return SkillValidationSchema.parse(proof.validation);
+}
+
+export function requiresAndroidEvaluation(spec: SkillSpec, episode: FailureEpisode): boolean {
+  return Boolean(spec.prevention) || spec.program.nodes.some(node => node.kind === "step" && ["inspect_changed_labels", "allow_unrelated_status_labels"].includes(node.operation.op))
+    || episode.steps.some(step => step.executor === "node-v1" && step.reason === "PAGE_CONTEXT_CHANGED");
 }
 
 type ReplayKind = "bounds_change" | "structure_change" | "focus_change" | "preflight_page_change" | "unactionable_control";
@@ -141,6 +166,8 @@ async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 export interface SkillEvaluationOptions {
   model?: ModelConfig; modelFetch?: ModelFetch; fixturePolicy?: FixturePolicy; signal?: AbortSignal;
   incumbents?: readonly SkillSpec[]; maxModelCalls?: number; maxDurationMs?: number;
+  android?: AndroidSkillTarget;
+  onAndroidCase?: (event: AndroidSkillCaseEvent)=>void;
 }
 type CaseResult = { result: EvaluationResult; applications: number; reproduced: boolean; contextRefusals: number };
 export interface SkillEvaluation { receipt: SkillReceipt; validation: SkillValidation }
@@ -155,15 +182,46 @@ export async function evaluateSkill(candidate: SkillSpec, inputEpisode: FailureE
     || spec.scope.policyRevision !== episode.scope.policyRevision || spec.scope.appDigest && spec.scope.appDigest !== episode.scope.appDigest
     || JSON.stringify(spec.trigger) !== JSON.stringify(episode.trigger) || spec.expiresAt <= Date.now()) throw new SkillEvaluationError("SKILLS_SCOPE_MISMATCH", spec);
   options.signal?.throwIfAborted();
-  const replay = compileEpisode(spec, episode), transformed = offlineSpec(spec), transformedHash = skillHash(transformed);
   const incumbents = (options.incumbents ?? []).map(s => SkillSpecSchema.parse(s));
   if (incumbents.length > 3 || incumbents.some(s => s.scope.hostVersion !== spec.scope.hostVersion || s.scope.modelProfile !== profile || s.expiresAt <= Date.now())) throw new SkillEvaluationError("SKILLS_SCOPE_MISMATCH", spec);
+  const maxCalls = options.maxModelCalls ?? 180, maxMs = options.maxDurationMs ?? 300_000;
+  if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 600 || !Number.isSafeInteger(maxMs) || maxMs < 1 || maxMs > 600_000) throw new SkillEvaluationError("SKILLS_INVALID_BUDGET", spec);
+  if (requiresAndroidEvaluation(spec, episode)) {
+    if (compileEpisode(spec, episode).kind !== "preflight_page_change") throw new RuntimeError("SKILLS_ANDROID_UNSUPPORTED", "SKILLS_ANDROID_UNSUPPORTED");
+    if (!options.android) throw new RuntimeError("SKILLS_ANDROID_REQUIRED", "SKILLS_ANDROID_REQUIRED");
+    // The real native backend owns fixture resets, private oracle and both arms.
+    // Imported report JSON and model-proposed tests cannot mint this receipt.
+    const deadline = AbortSignal.timeout(maxMs), budget = new AbortController();
+    const signal = AbortSignal.any([deadline, budget.signal, ...(options.signal ? [options.signal] : [])]);
+    let calls = 0;
+    const fetch: ModelFetch = async (url, init) => {
+      signal.throwIfAborted();
+      if (++calls > maxCalls) { budget.abort(new RuntimeError("SKILLS_ANDROID_BUDGET", "SKILLS_ANDROID_BUDGET")); signal.throwIfAborted(); }
+      return abortable((options.modelFetch ?? globalThis.fetch)(url, { ...init, signal: AbortSignal.any([signal, ...(init.signal ? [init.signal] : [])]) }), signal);
+    };
+    let native;
+    try {
+      native = await evaluateAndroidSkill(spec, { android: options.android, model, modelFetch: fetch, signal, hostVersion: spec.scope.hostVersion, incumbents, onCase:options.onAndroidCase });
+    } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason;
+      if (deadline.aborted || budget.signal.aborted) throw new RuntimeError("SKILLS_ANDROID_BUDGET", "SKILLS_ANDROID_BUDGET");
+      const rejected = SkillEvaluationError.fromAndroid(error, spec);
+      if (rejected) throw rejected;
+      throw error;
+    }
+    const { suite, ...evidence } = native;
+    const validation = SkillValidationSchema.parse({ ...evidence, skillHash: skillHash(spec), episodeHash: episodeFingerprint(episode), modelProfile: profile,
+      policyRevision: SKILL_POLICY_REVISION, evaluatorVersion: SKILL_EVALUATOR_VERSION, hostVersion: spec.scope.hostVersion, evaluatedAt: Date.now(),
+      contract: "android_recovery", androidSuite: suite, incumbentHashes: incumbents.map(skillHash) });
+    const receipt = Object.freeze({}) as SkillReceipt;
+    receipts.set(receipt, { validation, candidate: skillHash(spec), episode: episodeFingerprint(episode) });
+    return { receipt, validation };
+  }
+  const replay = compileEpisode(spec, episode), transformed = offlineSpec(spec), transformedHash = skillHash(transformed);
   const sameSlot = (value: SkillSpec) => value.scope.hostVersion === spec.scope.hostVersion && value.scope.policyRevision === spec.scope.policyRevision
     && value.scope.modelProfile === spec.scope.modelProfile && value.scope.appDigest === spec.scope.appDigest
     && JSON.stringify(value.trigger) === JSON.stringify(spec.trigger);
   const beforeSkills = incumbents.map(offlineSpec), afterSkills = [...incumbents.filter(s => !sameSlot(s)).map(offlineSpec), transformed];
-  const maxCalls = options.maxModelCalls ?? 180, maxMs = options.maxDurationMs ?? 300_000;
-  if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 600 || !Number.isSafeInteger(maxMs) || maxMs < 1 || maxMs > 600_000) throw new SkillEvaluationError("SKILLS_INVALID_BUDGET", spec);
   const deadline = new AbortController(), timer = setTimeout(() => deadline.abort(new Error("SKILLS_EVALUATION_BUDGET")), maxMs);
   const signal = AbortSignal.any([deadline.signal, ...(options.signal ? [options.signal] : [])]);
   const all: { scenario: string; split: string; repetition: number; baseline: CaseResult; candidate: CaseResult }[] = [];
@@ -195,6 +253,8 @@ export async function evaluateSkill(candidate: SkillSpec, inputEpisode: FailureE
               return abortable(base(url, init), signal);
             } });
           signal.throwIfAborted();
+          const providerCode = result.errors.map(skillModelFailureCode).find(Boolean);
+          if (providerCode) throw new RuntimeError(providerCode, providerCode);
           if (episodeCase && replay.kind === "unactionable_control") {
             const safe = result.mutations === 0 && reproduced && result.agentStatus !== "cancelled";
             result.verdict = safe ? "rejected_safe" : "failed";

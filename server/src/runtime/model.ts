@@ -47,7 +47,8 @@ function uiBytes(value: unknown): number {
   return Object.values(value).reduce<number>((sum, item) => sum + uiBytes(item), 0);
 }
 
-export async function completion(config: ModelConfig, messages: Message[], tools: AgentTool[], signal: AbortSignal, modelFetch: ModelFetch = globalThis.fetch): Promise<{
+export async function completion(config: ModelConfig, messages: Message[], tools: AgentTool[], signal: AbortSignal, modelFetch: ModelFetch = globalThis.fetch,
+  workload: "interactive" | "skill_generation" = "interactive"): Promise<{
   message: Message; tokens: number; requestBytes: number; responseBytes: number; modelUiBytes: number; rawUiBytes: number;
 }> {
   const endpoint = endpointFor(config);
@@ -71,7 +72,9 @@ export async function completion(config: ModelConfig, messages: Message[], tools
   });
   const requestBytes = Buffer.byteLength(payload);
   if (requestBytes > 256 * 1024) throw new RuntimeError("CONTEXT_LIMIT", "当前界面和工具定义超出单轮上下文限制，请缩小任务或界面读取范围。");
-  const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(90_000)]);
+  // Background synthesis is bounded by its own job deadline. It can need more
+  // reasoning than the next phone action; do not lengthen foreground waits.
+  const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(workload === "skill_generation" ? 180_000 : 90_000)]);
   let response: Response;
   try {
     response = await modelFetch(endpoint, {

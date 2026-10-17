@@ -44,6 +44,7 @@ export interface ImprovementStatus {
   dailyJobs: number;
   dailyModelCalls: number;
   lastReason?: string;
+  lastFailure?: { stage: 'generation' | 'evaluation' | 'adoption' | 'lifecycle'; code: string; httpStatus?: number };
 }
 export interface ClientEvent {
   type: string;

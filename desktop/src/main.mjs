@@ -9,6 +9,7 @@ import { LearningStore, summarizeCandidates, modelScope } from '../../server/dis
 import { SkillStore } from '../../server/dist/skills/store.js';
 import { ContinuousImprover } from '../../server/dist/skills/loop.js';
 import { SKILL_POLICY_REVISION, skillHash } from '../../server/dist/skills/schema.js';
+import { SkillUsageTracker } from '../../server/dist/skills/usage-outcome.js';
 import { createUsbClient, createWirelessClient, listUsbDevices } from '../../server/dist/client-tools.js';
 import { WirelessHub, listLANAddresses } from '../../server/dist/wireless.js';
 import QRCode from 'qrcode';
@@ -112,8 +113,7 @@ async function begin(value, demo) {
         const learningSnapshot = (await learning.loadActive(app.getVersion(), scope.modelFamily, Date.now(), scope.modelProfile).catch(() => [])).filter(entry => !disabledExperiences.has(entry.id));
         const skillScope = { hostVersion: app.getVersion(), policyRevision: SKILL_POLICY_REVISION, modelProfile: scope.modelProfile };
         const skillSnapshot = (await skills.loadTaskSnapshot(skillScope).catch(() => [])).filter(spec => !revokedSkills.has(skillHash(spec)));
-        const usedSkills = new Set();
-        const failedSkills = new Set();
+        const skillUsage = new SkillUsageTracker();
         let episode;
         const runDiagnostics = [];
         const usedExperiences = new Set();
@@ -121,15 +121,15 @@ async function begin(value, demo) {
         if (controller.signal.aborted) throw new ClientError('CANCELLED', '操作已取消。');
         result = await runAgent({ task: input.task, model, modelFetch, tools: run.client.tools, execute: (name, args, signal) => run.client.execute(name, args, signal), signal: controller.signal, onEvent, maxTurns: 24,
           diagnosticVersion: app.getVersion(), learningSnapshot, skillSnapshot,
-          onSkillUsed: hashes => hashes.forEach(hash => usedSkills.add(hash)),
-          onSkillTrace: step => { if (!['NONE', 'CANCELLED'].includes(step.errorCode)) usedSkills.forEach(hash => failedSkills.add(hash)); },
+          onSkillUsed: hashes => skillUsage.onUsed(hashes),
+          onSkillTrace: step => skillUsage.onTrace(step),
           onFailureEpisode: value => { episode = value; }, onExperienceUsed: ids => ids.forEach(id => usedExperiences.add(id)),
           onDiagnostic: event => { void diagnostics.append(event); if (runDiagnostics.length < 500) runDiagnostics.push(event); } });
         // Revoke before another foreground task can load its frozen snapshot.
         // A completed model answer is not independent proof of semantic success.
-        if (result.status === 'failed') usedSkills.forEach(hash => failedSkills.add(hash));
-        failedSkills.forEach(hash => revokedSkills.add(hash));
-        if (failedSkills.size) await skills.recordUsageOutcome([...failedSkills].slice(0, 3), 'failure').catch(() => {});
+        const skillOutcome = skillUsage.finish({ status: result.status, errorCode: result.error });
+        skillOutcome.failedSkillHashes.forEach(hash => revokedSkills.add(hash));
+        if (skillOutcome.failedSkillHashes.length) await skills.recordUsageOutcome(skillOutcome.failedSkillHashes.slice(0, 3), 'failure').catch(() => {});
         if (episode && !improvementStopped) await skills.recordEpisode(episode).catch(() => {});
         // The earlier fixed-strategy store remains compatible with developer tools.
         // Failure conservatively disables advice for the next task; completed
@@ -200,7 +200,10 @@ app.whenReady().then(async () => {
     decrypt: async value => (await safeStorage.decryptStringAsync(value)).result
   });
   try { await store.load(); } catch (error) { startupError = safeMessage(error); }
-  improver = new ContinuousImprover({ store: skills, modelFetch, resolveModel: () => {
+  improver = new ContinuousImprover({ store: skills, modelFetch,
+    android: process.env.TAPPILOT_SKILL_EMULATOR ? { serial: process.env.TAPPILOT_SKILL_EMULATOR,
+      adbPath: process.env.ADB_PATH || path.join(os.homedir(), 'Library/Android/sdk/platform-tools/adb') } : undefined,
+    resolveModel: () => {
     if (active || stopping || modelTest || savingConfig || improvementStopped) return undefined;
     try { return store.model(); } catch { return undefined; }
   }, onStatus: improvement => send({ type: 'improvement_state', improvement }) });

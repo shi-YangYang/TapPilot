@@ -3,6 +3,7 @@ import { connect, type Socket } from "node:net";
 import { z } from "zod";
 import { Adb } from "./adb.js";
 import { AgentError, publicError } from "./errors.js";
+import { ContextChangeSchema } from "./diagnostics/schema.js";
 
 const MAX_FRAME_BYTES = 4 * 1024 * 1024;
 // Fixed diagnostics only: never transport node labels, fingerprints or arbitrary details.
@@ -25,12 +26,14 @@ export const nativeRefusalCodes = [
 ] as const;
 const nativeRefusalDetails = z.object({
   executor: z.literal("node-v1"), dispatchState: z.literal("not_sent"), reason: z.enum(nativeRejectionReasons).optional(),
+  contextChange: ContextChangeSchema.optional(),
 }).strict();
 export const phoneErrorSchema = z.object({
   code: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/), message: z.string().max(2048), retryable: z.boolean(),
   details: z.union([nativeRefusalDetails, z.object({ reason: z.enum(staleSnapshotReasons) }).strict()]).optional(),
 }).strict().refine(error => error.details === undefined || ("executor" in error.details
-  ? (nativeRefusalCodes as readonly string[]).includes(error.code) : error.code === "STALE_SNAPSHOT"));
+  ? (nativeRefusalCodes as readonly string[]).includes(error.code) && (!error.details.contextChange || error.code === "TARGET_CHANGED" && error.details.reason === "PAGE_CONTEXT_CHANGED")
+  : error.code === "STALE_SNAPSHOT"));
 // Both USB NDJSON and paired wireless transport share this exact envelope.
 export const phoneResponseSchema = z.object({
   id: z.string().min(1).max(128), ok: z.boolean(), result: z.unknown().optional(),

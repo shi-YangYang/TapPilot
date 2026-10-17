@@ -7,6 +7,7 @@ import { actionRejectionReason, UI_PROJECTION_LEGEND } from "./ui-projection.js"
 import { createDiagnosticRunId, DiagnosticEventSchema, safeDiagnosticActionKind, safeDiagnosticErrorCode, safeDiagnosticReason, safeContextChange, type DiagnosticEvent } from "../diagnostics/schema.js";
 import { deepFreeze, ExperienceSchema, modelScope, retrieve, strategyHints, type FrozenSnapshot } from "../learning/schema.js";
 import { SkillSession, type SkillRuntimeOptions } from "../skills/runtime.js";
+import { observedLabelChanges } from "../skills/label-observation.js";
 export { testModel, endpointFor, RuntimeError } from "./model.js";
 export type { ModelConfig, ModelFetch, AgentTool } from "./model.js";
 
@@ -209,6 +210,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
     }] : nativeExit ? [nativeExit] : [];
     const conversation = new Conversation(SYSTEM, options.task);
     let latestObservation: Record<string, unknown> | undefined;
+    let preventiveBaseline: Record<string, unknown> | undefined;
     let pinnedSession: string | undefined;
     let unresolvedActionFailure = false;
     let acceptedAwaitingObservation = false;
@@ -223,7 +225,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
     let awaitingAcceptedProgress = false;
     const actionRepetitions = new Map<string, { count: number; errorCode?: string }>();
     const readRepetitions = new Map<string, { digest: string; count: number }>();
-    const perform = async (call: ToolCall, args: Record<string, unknown>, turn: number, hostRead = false) => {
+    const perform = async (call: ToolCall, args: Record<string, unknown>, turn: number, hostRead = false, preventiveRead = false) => {
       signal.throwIfAborted();
       const name = call.function.name;
       const action = actionName(name, args);
@@ -258,6 +260,15 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
         skills.record(diagnostic, beforeSkillObservation, undefined, skillTarget);
         throw error;
       } finally { metrics.toolMs += Math.round(performance.now() - toolStarted); }
+      if (preventiveRead && result.ok === true && !result.error) {
+        const labels = observedLabelChanges(preventiveBaseline, fullObservation(result));
+        if (labels) {
+          // Only annotate a fresh observation with physically observed changes.
+          // This makes no claim about meaning, permission or native non-dispatch.
+          result = structuredClone(result);
+          fullObservation(result)!.changedLabelNodeIds = labels;
+        }
+      }
       if (isRecord(result.meta) && result.meta.preflightRead === true) metrics.preflightReads = (metrics.preflightReads ?? 0) + 1;
       const observationError = isRecord(result.result) && isRecord(result.result.observationError) ? result.result.observationError : undefined;
       const reportedErrors = [isRecord(result.error) ? result.error.code : undefined, observationError?.code].filter((code): code is string => typeof code === "string");
@@ -307,6 +318,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
         ? result.error.details.contextChange : result.ok === true && isRecord(result.meta) ? result.meta.contextChange : undefined);
       const diagnosticAccepted = result.ok === true && isRecord(result.result) && isRecord(result.result.action) && result.result.action.accepted === true;
       const diagnostic = diagnose({ eventType: "tool_result", actionKind: safeDiagnosticActionKind(action ?? name),
+        ...(nativeRefusal ? { executor: "node-v1" as const } : {}),
         outcome: errorCode ? "failure" : result.ok === true ? "success" : "unknown",
         failureStage: errorCode ? nativeRefusal ? "phone_validation" : hostRefusal ? "host_validation" : observationError ? "observation" : "unknown" : "none",
         dispatchState: !action ? "not_applicable" : verifiedRefusal ? "not_sent" : diagnosticAccepted ? "sent" : "unknown",
@@ -321,6 +333,10 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
         ...(errorCode ? { errorCode } : {}), ...(errorReason ? { errorReason } : {}), ...(update.observationChanged !== undefined ? { observationChanged: update.observationChanged } : {}) });
       const incomingObservation = fullObservation(result);
       skills.record(diagnostic, beforeSkillObservation, incomingObservation, skillTarget);
+      if (preventiveRead) {
+        if (result.ok === true && !errorCode) skills.preparePrevention(preventiveBaseline, incomingObservation);
+        preventiveBaseline = undefined;
+      }
       const incomingScope = observationScope(incomingObservation);
       if ((pinnedSession && incomingScope && pinnedSession !== incomingScope.session) ||
           (toolError === "TARGET_CHANGED" && errorReason === "SESSION_CHANGED")) {
@@ -429,6 +445,21 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
     }
     for (let turn = 1; turn <= maxTurns; turn++) {
       signal.throwIfAborted();
+      // A tested scoped program may sample once initially or after a confirmed
+      // accepted action. Always compare from its returned new state, never from
+      // the pre-action UI; no model call or replayed mutation is added.
+      if (skills.hasPreventiveCandidate(latestObservation)) {
+        preventiveBaseline = latestObservation;
+        const waitArgs = { sinceRevision: latestObservation?.revision, timeoutMs: 250 };
+        if (validators.get("wait_for_ui_change")?.(waitArgs).valid) {
+          const waitCall: ToolCall = { id: `tappilot_preventive_wait_${turn}`, type: "function", function: { name: "wait_for_ui_change", arguments: JSON.stringify(waitArgs) } };
+          conversation.assistant({ role: "assistant", content: null, tool_calls: [waitCall] });
+          await perform(waitCall, waitArgs, turn, true);
+        }
+        const compare: ToolCall = { id: `tappilot_preventive_observation_${turn}`, type: "function", function: { name: "get_ui_tree", arguments: "{}" } };
+        conversation.assistant({ role: "assistant", content: null, tool_calls: [compare] });
+        await perform(compare, {}, turn, true, true);
+      }
       emit({ type: "model_start", turn });
       const modelStarted = performance.now();
       metrics.modelRequests++;

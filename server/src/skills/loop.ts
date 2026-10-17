@@ -1,15 +1,19 @@
 import { modelScope } from "../learning/schema.js";
 import type { ModelConfig, ModelFetch } from "../runtime/model.js";
-import { generateSkill } from "./generation.js";
+import { generateSkill, type SkillProposalDiagnostic } from "./generation.js";
 import { evaluateSkill, SkillEvaluationError } from "./evaluation.js";
 import { skillHash, type SkillFeedback, type SkillSpec } from "./schema.js";
 import { SkillStore, type StoreStatus } from "./store.js";
+import type { AndroidSkillTarget, AndroidSkillCaseEvent } from "./android-evaluation.js";
+import { safeSkillFailure, type SkillFailure, type SkillFailureStage } from "./failure.js";
+import type { SkillTrainingFeedback } from "./training-feedback.js";
 
 export type ImprovementPhase = "idle"|"queued"|"generating"|"evaluating"|"adopted"|"rejected"|"paused"|"budget_exhausted"|"error";
-export type ImprovementReason = "model_unavailable"|"cancelled"|"interrupted"|"no_candidate"|"evaluation_rejected"|"budget_exhausted"|"storage_unavailable"|"generation_failed";
+export type ImprovementReason = "model_unavailable"|"cancelled"|"interrupted"|"no_candidate"|"evaluation_rejected"|"budget_exhausted"|"storage_unavailable"|"generation_failed"|"evaluation_failed"|"adoption_failed";
 export type ImprovementStatus = StoreStatus & {phase: ImprovementPhase; lastReason?: ImprovementReason};
 export type ImproverOptions = {store: SkillStore; resolveModel: ()=>ModelConfig|undefined|Promise<ModelConfig|undefined>;
-  modelFetch?: ModelFetch; onStatus?: (status: ImprovementStatus)=>void; now?: ()=>number};
+  modelFetch?: ModelFetch; onStatus?: (status: ImprovementStatus)=>void; now?: ()=>number; android?: AndroidSkillTarget;
+  onAndroidCase?: (event: AndroidSkillCaseEvent)=>void; onInvalidProposal?: (diagnostic: SkillProposalDiagnostic)=>void};
 function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   if(signal.aborted)return Promise.reject(signal.reason);
   return new Promise<T>((resolve,reject)=>{const abort=()=>{cleanup();reject(signal.reason);},cleanup=()=>signal.removeEventListener("abort",abort);
@@ -28,8 +32,8 @@ function cancellableResponse(response: Response, signal: AbortSignal): Response 
   }),{status:response.status,statusText:response.statusText,headers:response.headers});
 }
 
-/** Background jobs run only on synthetic phones. They never share a live phone
- * bridge, tool executor or credential store with the evaluator. */
+/** Background jobs use abstract fixtures or an explicitly isolated Android
+ * testbed. They never reuse the foreground task's phone session. */
 export class ContinuousImprover {
   private phase: ImprovementPhase="idle";
   private lastReason?: ImprovementReason;
@@ -40,7 +44,12 @@ export class ContinuousImprover {
   private rescheduleRequested=false;
   private readonly now: ()=>number;
   constructor(readonly options: ImproverOptions){this.now=options.now??Date.now;}
-  async status():Promise<ImprovementStatus>{return{...await this.options.store.status(this.now()),phase:this.phase,...(this.lastReason?{lastReason:this.lastReason}:{})};}
+  async status():Promise<ImprovementStatus>{
+    const stored=await this.options.store.status(this.now()),failure=stored.lastFailure;
+    const reason=this.lastReason??(failure?failure.code==="SKILLS_CANCELLED"?"cancelled":failure.code==="SKILLS_INTERRUPTED"?"interrupted":
+      failure.stage==="generation"?"generation_failed":failure.stage==="evaluation"?"evaluation_rejected":failure.stage==="adoption"?"adoption_failed":undefined:undefined);
+    return{...stored,phase:this.phase,...(reason?{lastReason:reason}:{})};
+  }
   private async announce(phase:ImprovementPhase, reason?:ImprovementReason){this.phase=phase;this.lastReason=reason;
     if(this.options.onStatus)try{this.options.onStatus(await this.status());}catch{/* UI observers cannot alter job outcomes. */}}
   schedule():void{
@@ -69,38 +78,48 @@ export class ContinuousImprover {
       let profile:string;try{profile=modelScope(frozenModel).modelProfile;}catch{await this.announce("paused","model_unavailable");return;}
       const claimed=await this.options.store.beginJob(profile,this.now());if(!claimed){await this.announce("idle");return;}
       if(this.paused){await this.options.store.finishJob(claimed.job.id,"interrupted",this.now());return;}
-      this.controller=new AbortController();const signal=AbortSignal.any([this.controller.signal,AbortSignal.timeout(5*60_000)]);
+      // Native evaluation has 22 bounded Android runs per candidate, plus generation.
+      // Its fixed job allowance covers a revision; the atomic daily cap stays 200.
+      this.controller=new AbortController();const signal=AbortSignal.any([this.controller.signal,AbortSignal.timeout(this.options.android?15*60_000:5*60_000)]);
+      const modelCallBudget=this.options.android?150:100;
       const {job,episode}=claimed;let parent=claimed.parent,feedback:SkillFeedback[]=[];let budgetExhausted=false;
+      let evaluationFeedback:SkillTrainingFeedback|undefined;
       if(parent&&episode.appliedSkillHashes.includes(skillHash(parent)))feedback=[{skillHash:skillHash(parent),outcome:"runtime_failure",errorCode:episode.trigger.errorCode,reason:episode.trigger.reason,metric:"unknown"}];
       const budgetFetch:ModelFetch=async(url,init)=>{
-        signal.throwIfAborted();try{await this.options.store.reserveModelCall(job.id,this.now());}catch(error){if(error instanceof Error&&error.message==="SKILLS_BUDGET_EXHAUSTED")budgetExhausted=true;throw error;}signal.throwIfAborted();
+        signal.throwIfAborted();try{await this.options.store.reserveModelCall(job.id,this.now(),modelCallBudget);}catch(error){if(error instanceof Error&&error.message==="SKILLS_BUDGET_EXHAUSTED")budgetExhausted=true;throw error;}signal.throwIfAborted();
         const combined=init.signal?AbortSignal.any([signal,init.signal]):signal;
         const response=await abortable((this.options.modelFetch??globalThis.fetch)(url,{...init,signal:combined}),combined);
         return cancellableResponse(response,combined);
       };
-      let adopted=false;
+      let adopted=false,stage:SkillFailureStage="generation",lastEvaluationFailure:SkillFailure|undefined;
       try{
         for(let candidateIndex=0;candidateIndex<2;candidateIndex++){
-          signal.throwIfAborted();await this.announce("generating");
-          const spec:SkillSpec=await generateSkill(episode,{model:frozenModel,modelFetch:budgetFetch,signal,now:this.now(),parent,feedback});
+          signal.throwIfAborted();stage="generation";await this.announce("generating");
+          const spec:SkillSpec=await generateSkill(episode,{model:frozenModel,modelFetch:budgetFetch,signal,now:this.now(),parent,feedback,evaluationFeedback,onInvalidProposal:this.options.onInvalidProposal});
           signal.throwIfAborted();const hash=await this.options.store.addCandidate(job.id,spec,this.now());
-          await this.announce("evaluating");
+          stage="evaluation";await this.announce("evaluating");
           try{
             const evaluation=await evaluateSkill(spec,episode,{model:frozenModel,modelFetch:budgetFetch,signal,
-              incumbents:await this.options.store.loadSnapshot(episode.scope,this.now()),maxModelCalls:100,maxDurationMs:5*60_000});
-            signal.throwIfAborted();await this.options.store.adopt(job.id,hash,evaluation.receipt,this.now());adopted=true;await this.announce("adopted");break;
+              incumbents:await this.options.store.loadSnapshot(episode.scope,this.now()),maxModelCalls:modelCallBudget,maxDurationMs:this.options.android?10*60_000:5*60_000,
+              android:this.options.android,onAndroidCase:this.options.onAndroidCase});
+            signal.throwIfAborted();stage="adoption";await this.options.store.adopt(job.id,hash,evaluation.receipt,this.now());adopted=true;await this.announce("adopted");break;
           }catch(error){
             signal.throwIfAborted();
             if(!(error instanceof SkillEvaluationError))throw error;
-            await this.options.store.rejectCandidate(job.id,error.feedback);feedback=[error.feedback];parent=spec;
+            lastEvaluationFailure=safeSkillFailure(error,"evaluation");
+            await this.options.store.rejectCandidate(job.id,error.feedback);feedback=[error.feedback];evaluationFeedback=error.evaluationFeedback;parent=spec;
           }
         }
-        if(!adopted){await this.options.store.finishJob(job.id,"rejected",this.now());await this.announce("rejected","evaluation_rejected");}
+        if(!adopted){await this.options.store.finishJob(job.id,"rejected",this.now(),lastEvaluationFailure);await this.announce("rejected","evaluation_rejected");}
       }catch(error){
-        const budget=budgetExhausted||error instanceof Error&&/BUDGET|LIMIT/.test(error.message);
+        let failure=safeSkillFailure(error,stage);
+        const budget=budgetExhausted||["SKILLS_BUDGET_EXHAUSTED","SKILLS_EVALUATION_BUDGET","SKILLS_ANDROID_BUDGET","SKILLS_STORE_LIMIT","CONTEXT_LIMIT","MODEL_RESPONSE_LIMIT","MODEL_OUTPUT_LIMIT"].includes(failure.code);
         const interrupted=this.paused||signal.aborted;
-        await this.options.store.finishJob(job.id,interrupted?(this.discard?"cancelled":"interrupted"):budget?"exhausted":"rejected",this.now());
-        await this.announce(interrupted?"paused":budget?"budget_exhausted":"rejected",interrupted?(this.discard?"cancelled":"interrupted"):budget?"budget_exhausted":"generation_failed");
+        if(this.paused)failure={stage:"lifecycle",code:this.discard?"SKILLS_CANCELLED":"SKILLS_INTERRUPTED"};
+        else if(signal.aborted)failure={stage,code:"SKILLS_JOB_TIMEOUT"};
+        else if(budgetExhausted)failure={stage,code:"SKILLS_BUDGET_EXHAUSTED"};
+        await this.options.store.finishJob(job.id,interrupted?(this.discard?"cancelled":"interrupted"):budget?"exhausted":"rejected",this.now(),failure);
+        await this.announce(interrupted?"paused":budget?"budget_exhausted":"rejected",interrupted?(this.discard?"cancelled":"interrupted"):budget?"budget_exhausted":stage==="evaluation"?"evaluation_failed":stage==="adoption"?"adoption_failed":"generation_failed");
       }finally{this.controller=undefined;}
     }
   }

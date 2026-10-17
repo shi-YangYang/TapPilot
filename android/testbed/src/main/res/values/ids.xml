@@ -27,5 +27,7 @@
     <item name="native_amount" type="id" />
     <item name="native_status" type="id" />
     <item name="native_input" type="id" />
+    <item name="native_input_second" type="id" />
+    <item name="native_save" type="id" />
     <item name="native_cover" type="id" />
 </resources>

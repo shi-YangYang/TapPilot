@@ -86,6 +86,24 @@ test("only reserved host refusal metadata proves no dispatch; generic preflight-
   }
 });
 
+test("native context diagnostics require the controller's refusal proof, not an executor string in an observation", async () => {
+  const contextChange = { region: "outside_target", kind: "content", changedNodes: 1, targetMatched: true, actionTargetMatched: true };
+  for (const trusted of [true, false]) {
+    const events: DiagnosticEvent[] = [];
+    await run(async name => {
+      if (name === "get_ui_tree") return { ok: true, result: observation(1) };
+      return { ok: false, error: { code: "TARGET_CHANGED", message: SENTINEL,
+        details: { executor: "node-v1", dispatchState: "not_sent", reason: "PAGE_CONTEXT_CHANGED", contextChange } },
+        ...(trusted ? { meta: { nativeExecutorRefusal: true } } : {}), observation: { ...observation(2), executor: "node-v1" } };
+    }, event => { events.push(event); });
+    const failure = events.find(item => item.actionKind === "input_text")!;
+    assert.equal(failure.executor, trusted ? "node-v1" : undefined);
+    assert.equal(failure.failureStage, trusted ? "phone_validation" : "unknown");
+    assert.deepEqual(failure.contextChange, trusted ? contextChange : undefined);
+    assert.equal(JSON.stringify(events).includes(SENTINEL), false);
+  }
+});
+
 test("throwing and rejecting diagnostic readers cannot alter the task or create unhandled rejections", async () => {
   let delivered = 0;
   const result = await run(async name => name === "get_ui_tree" ? { ok: true, result: observation(1) } :

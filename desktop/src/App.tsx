@@ -10,6 +10,7 @@ import { Tooltip, TooltipProvider } from '@/components/motion/tooltip';
 import type { ConnectionMode, PageName } from './client-types';
 import { useClient, type ClientController } from './use-client';
 import { useTheme } from './use-theme';
+import { improvementStatusText } from './improvement-copy';
 
 const prompts = [
   { label: '查看电池', icon: Battery, text: '打开系统设置，进入电池页面，告诉我当前显示了什么。' },
@@ -91,10 +92,10 @@ function ModelPage({ client: c }: { client: ClientController }) {
     <p className="privacy-caption">任务和必要的手机界面信息会发送到此服务。</p>
     <Card className="settings-card">
       <CardHeader><CardTitle as="h2">自动改进</CardTitle><CardDescription>从失败中学习，通过测试后用于后续任务。</CardDescription><CardAction><Button id="improvement-toggle" variant="outline" aria-pressed={c.improvement.enabled} disabled={!c.ready || c.improvementBusy} onClick={() => void c.toggleImprovement()}>{c.improvement.enabled ? '已开启' : '已关闭'}</Button></CardAction></CardHeader>
-      <CardContent><p id="improvement-status" className="inline-result" role="status">{!c.improvement.enabled ? '已关闭' : ({ idle: '等待新的失败记录', queued: '等待空闲时改进', generating: '正在总结改进方案', evaluating: '正在测试新技能', adopted: '新技能已采用', rejected: '本次方案未通过，保留现有能力', paused: '已暂停', budget_exhausted: '今日改进额度已用完', error: '自动改进暂不可用' })[c.improvement.phase]} · {c.improvement.activeSkills} 项有效技能</p></CardContent>
+      <CardContent><p id="improvement-status" className="inline-result" role="status">{improvementStatusText(c.improvement)} · {c.improvement.activeSkills} 项有效技能</p></CardContent>
       <CardFooter className="form-footer"><span className="local-key">使用当前模型，可能产生费用</span><Button id="improvement-rollback" variant="outline" disabled={!c.improvement.activeSkills || c.improvementBusy || c.busy} onClick={() => void c.rollbackImprovement()}>撤回改进</Button></CardFooter>
     </Card>
-    <details className="help-details"><summary>填写说明与自动改进</summary><p>自动改进只在空闲时运行，每天最多 2 轮、200 次模型请求。测试在电脑内的模拟界面完成，不操作手机。仅保存不含文字的结构与错误记录；聊天、输入内容和截图不进入经验库。可随时关闭，停止任务也会取消后台改进。</p><p>同一服务的密钥留空可保留。更换地址的域名或端口会清除旧密钥，请填写新服务的密钥。</p><p>本机模型可用 http://localhost:端口/v1，无鉴权时密钥可留空。测试连接成功后，可先运行“总结界面”。</p></details>
+    <details className="help-details"><summary>填写说明与自动改进</summary><p>自动改进只在空闲时运行，每天最多 2 轮、200 次模型请求。测试使用电脑内的合成界面或专用 Android 模拟器，不操作日常使用的手机。仅保存不含文字的结构与错误记录；聊天、输入内容和截图不进入经验库。可随时关闭，停止任务也会取消后台改进。</p><p>同一服务的密钥留空可保留。更换地址的域名或端口会清除旧密钥，请填写新服务的密钥。</p><p>本机模型可用 http://localhost:端口/v1，无鉴权时密钥可留空。测试连接成功后，可先运行“总结界面”。</p></details>
   </section>;
 }
 function WirelessPanel({ client: c }: { client: ClientController }) {
