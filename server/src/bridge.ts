@@ -3,7 +3,8 @@ import { connect, type Socket } from "node:net";
 import { z } from "zod";
 import { Adb } from "./adb.js";
 import { AgentError, publicError } from "./errors.js";
-import { ContextChangeSchema } from "./diagnostics/schema.js";
+import { ContextChangeSchema, VisualComparisonSchema } from "./diagnostics/schema.js";
+import { isScreenshotReasonPair, screenshotFailureReasons } from "./screenshot-errors.js";
 
 const MAX_FRAME_BYTES = 4 * 1024 * 1024;
 // Fixed diagnostics only: never transport node labels, fingerprints or arbitrary details.
@@ -15,32 +16,38 @@ export const nativeRejectionReasons = [
   ...staleSnapshotReasons, "SESSION_CHANGED", "TARGET_IDENTITY_CHANGED", "TARGET_AMBIGUOUS", "PAGE_CONTEXT_CHANGED",
   "INCOMPLETE_TREE", "INVALID_HIERARCHY", "TARGET_DISABLED", "TARGET_HIDDEN", "SENSITIVE_TARGET",
   "NO_CLICKABLE_TARGET", "HIDDEN_ANCESTOR", "INVALID_BOUNDS", "TARGET_CLIPPED", "AMBIGUOUS_TOUCH_TARGET",
-  "TOUCH_TARGET_MISMATCH", "WINDOW_OBSCURED",
+  "TOUCH_TARGET_MISMATCH", "WINDOW_OBSCURED", "OBSERVATION_SETTLING",
 ] as const;
 export const nativeRefusalCodes = [
   "TARGET_CHANGED", "NODE_NOT_ACTIONABLE", "READ_REQUIRED", "STALE_SNAPSHOT", "NODE_NOT_FOUND", "NO_KNOWN_SNAPSHOT",
   "MANUAL_ACTION_REQUIRED", "PASSWORD_FIELD_BLOCKED", "DEVICE_LOCKED", "PROTECTED_APP", "EMERGENCY_STOPPED",
   "SERVICE_UNAVAILABLE", "NO_ACTIVE_WINDOW", "INVALID_ARGUMENT", "UNKNOWN_METHOD",
   "NODE_NOT_VISIBLE", "NODE_DISABLED", "SENSITIVE_FIELD", "NOT_CLICKABLE", "NOT_EDITABLE", "NOT_SCROLLABLE",
-  "TRUNCATED_SNAPSHOT", "COMMAND_TIMEOUT", "CANCELLED",
+  "TRUNCATED_SNAPSHOT", "COMMAND_TIMEOUT", "CANCELLED", "UI_NOT_READY",
 ] as const;
 const nativeRefusalDetails = z.object({
   executor: z.literal("node-v1"), dispatchState: z.literal("not_sent"), reason: z.enum(nativeRejectionReasons).optional(),
   contextChange: ContextChangeSchema.optional(),
 }).strict();
+export const visualRefusalDetailsSchema = z.object({
+  executor: z.literal("visual-tap-v1"), dispatchState: z.literal("not_sent"), visualComparison: VisualComparisonSchema,
+}).strict();
 export const phoneErrorSchema = z.object({
   code: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/), message: z.string().max(2048), retryable: z.boolean(),
-  details: z.union([nativeRefusalDetails, z.object({ reason: z.enum(staleSnapshotReasons) }).strict()]).optional(),
+  details: z.union([nativeRefusalDetails, visualRefusalDetailsSchema, z.object({ reason: z.enum(staleSnapshotReasons) }).strict(),
+    z.object({ reason: z.enum(screenshotFailureReasons) }).strict()]).optional(),
 }).strict().refine(error => error.details === undefined || ("executor" in error.details
-  ? (nativeRefusalCodes as readonly string[]).includes(error.code) && (!error.details.contextChange || error.code === "TARGET_CHANGED" && error.details.reason === "PAGE_CONTEXT_CHANGED")
-  : error.code === "STALE_SNAPSHOT"));
+  ? error.details.executor === "visual-tap-v1" ? error.code === "VISUAL_SCENE_CHANGED"
+    : (nativeRefusalCodes as readonly string[]).includes(error.code) && (!error.details.contextChange || error.code === "TARGET_CHANGED" && error.details.reason === "PAGE_CONTEXT_CHANGED")
+  : error.code === "STALE_SNAPSHOT" ? (staleSnapshotReasons as readonly string[]).includes(error.details.reason)
+    : isScreenshotReasonPair(error.code, error.details.reason)));
 // Both USB NDJSON and paired wireless transport share this exact envelope.
 export const phoneResponseSchema = z.object({
   id: z.string().min(1).max(128), ok: z.boolean(), result: z.unknown().optional(),
   error: phoneErrorSchema.optional(), observation: z.unknown().optional(),
   meta: z.object({ durationMs: z.number().finite().nonnegative() }).strict(),
 }).strict().refine((v) => v.ok ? !v.error && "result" in v && !("observation" in v)
-  : !!v.error && !("result" in v) && (!("observation" in v) || Boolean(v.error.details && "executor" in v.error.details)));
+  : !!v.error && !("result" in v) && (!("observation" in v) || Boolean(v.error.details && "executor" in v.error.details && v.error.details.executor === "node-v1")));
 
 export interface BridgeResponse {
   id: string;

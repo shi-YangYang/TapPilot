@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.tappilot.testbed",
+  "activity": "dev.tappilot.testbed/.MainActivity",
+  "oraclePath": "files/oracle.json",
+  "scenarios": [
+    { "id": "semantic_event_noise", "kind": "wait_noise", "target": "semantic_target", "timeoutMs": 1200 },
+    { "id": "semantic_large_noise", "kind": "wait_noise", "target": "semantic_target", "timeoutMs": 1200, "minNodes": 301 },
+    { "id": "semantic_blank", "kind": "quality_empty" },
+    { "id": "semantic_text_only", "kind": "quality_text" },
+    { "id": "semantic_delayed", "kind": "wait_changed", "target": "semantic_arm", "armed": true, "timeoutMs": 4000 },
+    { "id": "semantic_selector", "kind": "wait_match", "target": "semantic_arm", "armed": true, "timeoutMs": 4000 },
+    { "id": "semantic_selector_visible", "kind": "wait_visible", "target": "semantic_target", "timeoutMs": 1200 },
+    { "id": "semantic_blank_recovery", "kind": "wait_recovery", "target": "semantic_arm", "armed": true, "timeoutMs": 4000 },
+    { "id": "semantic_window", "kind": "wait_window", "target": "semantic_arm", "armed": true, "timeoutMs": 4000 },
+    { "id": "semantic_noop", "kind": "action_noop", "target": "semantic_target" },
+    { "id": "semantic_input", "kind": "action_input", "target": "semantic_input" }
+  ]
+}

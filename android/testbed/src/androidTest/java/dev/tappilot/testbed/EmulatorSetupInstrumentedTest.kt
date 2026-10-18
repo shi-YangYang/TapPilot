@@ -67,10 +67,34 @@ class EmulatorSetupInstrumentedTest {
             // Do not mistake an unrelated Settings switch for TapPilot's permission.
             val settings = current.filter { it.packageName?.toString() == "com.android.settings" && it.isVisibleToUser }
             if (settings.none { it.text?.toString()?.contains(serviceLabel) == true }) return null
-            // Android Settings can expose both main and shortcut switches with the same ID.
-            // The exact "Use <service>" label identifies the main control's clickable row.
-            settings.singleOrNull { it.text?.toString() in setOf("Use $serviceLabel", "使用$serviceLabel", "使用 $serviceLabel") }?.let { return it }
-            val main = settings.filter { it.viewIdResourceName == "com.android.settings:id/switch_widget" && it.isCheckable }
+            // Return the actual checkable control. The row's non-checkable title always
+            // reports isChecked=false, including when an already-enabled service crashed.
+            val useLabels = setOf("Use $serviceLabel", "使用$serviceLabel", "使用 $serviceLabel")
+            fun containsUseLabel(node: AccessibilityNodeInfo, depth: Int = 0): Boolean {
+                if (node.text?.toString() in useLabels) return true
+                if (depth >= 4) return false
+                for (index in 0 until node.childCount) {
+                    val child = node.getChild(index) ?: continue
+                    try { if (containsUseLabel(child, depth + 1)) return true } finally { child.recycle() }
+                }
+                return false
+            }
+            val main = settings.filter { it.viewIdResourceName in setOf("android:id/switch_widget", "com.android.settings:id/switch_widget") && it.isCheckable }
+            fun labelDistance(control: AccessibilityNodeInfo): Int {
+                var ancestor = control.parent
+                try {
+                    for (distance in 1..4) {
+                        val row = ancestor ?: return Int.MAX_VALUE
+                        if (containsUseLabel(row)) return distance
+                        ancestor = row.parent
+                        row.recycle()
+                    }
+                    return Int.MAX_VALUE
+                } finally { ancestor?.recycle() }
+            }
+            val distances = main.associateWith(::labelDistance)
+            val closest = distances.values.minOrNull()
+            if (closest != null && closest < Int.MAX_VALUE) distances.entries.singleOrNull { it.value == closest }?.let { return it.key }
             if (main.size == 1) return main.single()
             if (main.isNotEmpty()) return null
             val useLabel = settings.any { it.text?.toString() in setOf("Use $serviceLabel", "使用$serviceLabel", "使用 $serviceLabel") }
@@ -83,6 +107,14 @@ class EmulatorSetupInstrumentedTest {
             if (dialog.none { it.text?.toString()?.contains(serviceLabel) == true }) return null
             return dialog.singleOrNull { it.text?.toString() in setOf("Allow", "ALLOW", "允许") && it.isClickable && it.isEnabled }
         }
+        fun permissionStop(current: List<AccessibilityNodeInfo>): AccessibilityNodeInfo? {
+            val dialog = current.filter { it.packageName?.toString() == "com.android.settings" && it.isVisibleToUser }
+            if (dialog.none { node ->
+                val text = node.text?.toString().orEmpty()
+                serviceLabel in text && (text.startsWith("Stop ") || text.startsWith("停止") || text.startsWith("停用"))
+            }) return null
+            return dialog.singleOrNull { it.text?.toString() in setOf("Stop", "STOP", "停止", "停用") && it.isClickable && it.isEnabled }
+        }
         fun serviceEnabled(): Boolean {
             val manager = instrumentation.targetContext.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
             return manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK).any {
@@ -90,6 +122,8 @@ class EmulatorSetupInstrumentedTest {
             }
         }
         if (!serviceEnabled()) {
+            var enableRequested = false
+            var recoveryAttempted = false
             instrumentation.targetContext.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             until("TapPilot service entry unavailable") {
                 if (serviceEnabled()) return@until true
@@ -100,7 +134,7 @@ class EmulatorSetupInstrumentedTest {
                     diagnostic("SERVICE_DETAIL_READY")
                     return@until true
                 }
-                if (permissionAllow(current) != null) {
+                if (permissionAllow(current) != null || permissionStop(current) != null) {
                     diagnostic("PERMISSION_DIALOG_READY")
                     return@until true
                 }
@@ -117,14 +151,14 @@ class EmulatorSetupInstrumentedTest {
             until("service switch unavailable") {
                 if (serviceEnabled()) return@until true
                 val current = nodes()
-                if (permissionAllow(current) != null) return@until true
+                if (permissionAllow(current) != null || permissionStop(current) != null) return@until true
                 val mainSwitch = serviceSwitch(current)
                 if (mainSwitch == null) {
                     diagnostic("WAITING_SERVICE_SWITCH")
                     false
                 } else {
                     diagnostic(if (mainSwitch.isChecked) "SERVICE_SWITCH_CHECKED" else "SERVICE_SWITCH_UNCHECKED")
-                    mainSwitch.isChecked || click(mainSwitch)
+                    mainSwitch.isChecked || click(mainSwitch).also { if (it) enableRequested = true }
                 }
             }
             until("service permission not enabled through UI") {
@@ -133,9 +167,26 @@ class EmulatorSetupInstrumentedTest {
                     return@until true
                 }
                 val current = nodes()
+                val stop = permissionStop(current)
+                if (stop != null) {
+                    diagnostic("RECOVER_CRASHED_SERVICE")
+                    recoveryAttempted = true
+                    click(stop)
+                    return@until false
+                }
                 val allow = permissionAllow(current)
-                if (allow != null) { diagnostic("ALLOW_PERMISSION"); click(allow); false }
-                else false
+                if (allow != null) {
+                    diagnostic("ALLOW_PERMISSION"); enableRequested = true; click(allow)
+                } else serviceSwitch(current)?.let { mainSwitch ->
+                    if (!mainSwitch.isChecked) {
+                        if (click(mainSwitch)) enableRequested = true
+                    } else if (!enableRequested && !recoveryAttempted) {
+                        // Instrumentation may kill an enabled service process. Recover only
+                        // this named emulator service through its normal off/on Settings UI.
+                        if (click(mainSwitch)) recoveryAttempted = true
+                    }
+                }
+                false
             }
         }
         instrumentation.targetContext.startActivity(Intent().setComponent(ComponentName("dev.tappilot.agent", "dev.tappilot.agent.MainActivity")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

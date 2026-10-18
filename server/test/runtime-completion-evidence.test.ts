@@ -76,13 +76,16 @@ test("preflight and local refusals retain an explanation but cannot claim comple
 
 test("fresh reads and matching metadata cannot erase a refused action", async () => {
   let reads = 0;
-  const { result } = await scenario([tap, { name: "get_ui_tree" }, current], async name => {
+  const { result, calls } = await scenario([tap, { name: "wait_for_ui_change", args: { sinceRevision: 2, timeoutMs: 1 } }, current], async name => {
     if (name === "get_ui_tree") return observed(++reads);
+    if (name === "wait_for_ui_change") return observed(3);
     if (name === "get_current_app") return { ok: true, result: { packageName: "synthetic.fixture", windowId: 4 } };
     return { ok: false, error: { code: "TARGET_CHANGED" }, observation: tree(2), meta: { preflightRead: true } };
   });
   assert.match(result.error!, /ACTION_NOT_COMPLETED/);
-  assert.equal(reads, 2);
+  assert.equal(reads, 1);
+  assert.deepEqual(calls, ["get_ui_tree", "act_and_observe", "wait_for_ui_change", "get_current_app"],
+    "the offered wait returns fresh UI, but neither it nor metadata clears the refusal or permits a final read");
 });
 
 test("an accepted subsequent action with a full observation recovers an earlier refusal", async () => {
@@ -99,7 +102,7 @@ test("an accepted subsequent action with a full observation recovers an earlier 
 });
 
 test("partial find matches cannot independently restore completion evidence", async () => {
-  const { result, calls } = await scenario([find], async name => name === "get_ui_tree" ? observed() : {
+  const { result, calls } = await scenario([find], async name => name === "get_ui_tree" ? observed(1, { truncated: true }) : {
     ok: true, result: { snapshotId: "synthetic-session:2", elements: [{ nodeId: "n1", text: "Synthetic destination" }] },
   });
   assert.match(result.error!, /NO_OBSERVATION/);

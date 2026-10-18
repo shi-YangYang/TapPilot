@@ -27,11 +27,11 @@ function argumentsOf(argv) {
   return args;
 }
 
-function observation(value) {
+export function observation(value) {
   return value?.result?.observation ?? value?.observation ?? (Array.isArray(value?.result?.nodes) ? value.result : undefined);
 }
 
-function target(tree, id) {
+export function target(tree, id) {
   if (tree?.executor !== 'node-v1' || tree.packageName !== packageName || !Array.isArray(tree.nodes)) fail('NATIVE_EXECUTOR_UI_REQUIRED');
   const nodes = tree.nodes.filter(node => typeof node.resourceId === 'string' && node.resourceId.endsWith(`/id/${id}`) && node.visible !== false && node.enabled !== false);
   // Android resource names are package:id/name, compact projections may use id/name.
@@ -59,7 +59,7 @@ function stableUiSignature(tree, maskedResourceIds = []) {
 }
 
 /** Fixture launch stabilization only. Known timer labels may refresh; never reread after the measured mutation/action. */
-async function stableSetupTree(client, first, requiredIds, maskedResourceIds = []) {
+export async function stableSetupTree(client, first, requiredIds, maskedResourceIds = []) {
   let previous, current = first;
   const deadline = Date.now() + 6_000;
   do {
@@ -84,7 +84,7 @@ async function stableSetupTree(client, first, requiredIds, maskedResourceIds = [
   fail('FIXTURE_STARTUP_NOT_STABLE');
 }
 
-async function until(probe, timeoutMs = 6_000) {
+export async function until(probe, timeoutMs = 6_000) {
   const deadline = Date.now() + timeoutMs;
   do {
     const value = await probe();
@@ -92,6 +92,27 @@ async function until(probe, timeoutMs = 6_000) {
     await pause(35);
   } while (Date.now() < deadline);
   fail('FIXTURE_CONDITION_TIMEOUT');
+}
+
+/** Both native suites use the exact desktop/MCP production controllers. */
+export async function createNativeEntry(entry, { adbPath, serial }) {
+  const { Adb } = await import(pathToFileURL(path.join(root, 'server/dist/adb.js')));
+  const { Bridge } = await import(pathToFileURL(path.join(root, 'server/dist/bridge.js')));
+  const { ToolController } = await import(pathToFileURL(path.join(root, 'server/dist/tools.js')));
+  const { ApprovalQueue } = await import(pathToFileURL(path.join(root, 'server/dist/approvals.js')));
+  const { createPhoneClient } = await import(pathToFileURL(path.join(root, 'server/dist/client-tools.js')));
+  const access = new Adb({ executable: adbPath, serial, allowEmulator: true });
+  await access.select();
+  const bridge = new Bridge(access);
+  if (entry === 'desktop') {
+    const client = createPhoneClient(bridge, access);
+    return { call: (name, input) => client.execute(name, input, AbortSignal.timeout(15_000)), close: () => client.close() };
+  }
+  const controller = new ToolController(bridge, access, new ApprovalQueue(), 'trusted');
+  return { call: async (name, input) => {
+    const response = await controller.invoke(name, input);
+    return response.structuredContent ?? JSON.parse(response.content.find(item => item.type === 'text').text);
+  }, close: () => bridge.close() };
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -109,25 +130,6 @@ export async function main(argv = process.argv.slice(2)) {
   if (scenes.some(id => !definitions.scenarios.some(scene => scene.id === id))) fail('UNKNOWN_FIXTURE');
   const adbPath = process.env.ADB_PATH ?? path.join(homedir(), 'Library/Android/sdk/platform-tools/adb');
   const adb = async (...command) => (await exec(adbPath, ['-s', args.serial, ...command], { timeout: 20_000, maxBuffer: 2 * 1024 * 1024 })).stdout.trim();
-  const { Adb } = await import(pathToFileURL(path.join(root, 'server/dist/adb.js')));
-  const { Bridge } = await import(pathToFileURL(path.join(root, 'server/dist/bridge.js')));
-  const { ToolController } = await import(pathToFileURL(path.join(root, 'server/dist/tools.js')));
-  const { ApprovalQueue } = await import(pathToFileURL(path.join(root, 'server/dist/approvals.js')));
-  const { createPhoneClient } = await import(pathToFileURL(path.join(root, 'server/dist/client-tools.js')));
-  const createEntry = async entry => {
-    const access = new Adb({ executable: adbPath, serial: args.serial, allowEmulator: true });
-    await access.select();
-    const bridge = new Bridge(access);
-    if (entry === 'desktop') {
-      const client = createPhoneClient(bridge, access);
-      return { call: (name, input) => client.execute(name, input, AbortSignal.timeout(15_000)), close: () => client.close() };
-    }
-    const controller = new ToolController(bridge, access, new ApprovalQueue(), 'trusted');
-    return { call: async (name, input) => {
-      const response = await controller.invoke(name, input);
-      return response.structuredContent ?? JSON.parse(response.content.find(item => item.type === 'text').text);
-    }, close: () => bridge.close() };
-  };
   const reports = [];
   for (const entry of entries) for (const id of scenes) for (let repetition = 1; repetition <= args.repeat; repetition++) {
     const scenario = definitions.scenarios.find(scene => scene.id === id);
@@ -148,7 +150,7 @@ export async function main(argv = process.argv.slice(2)) {
         const state = await oracle();
         return state?.page === 'native_ready' && state.completed === false && state.clickCount === 0 && state;
       });
-      client = await createEntry(entry);
+      client = await createNativeEntry(entry, { adbPath, serial: args.serial });
       await until(async () => {
         const current = await client.call('get_current_app', {});
         return current.ok === true && current.result?.packageName === packageName;
@@ -164,13 +166,16 @@ export async function main(argv = process.argv.slice(2)) {
       tree = await stableSetupTree(client, tree, scenario.change === 'armed' ? [targetId, 'native_arm'] : [targetId],
         startupRefreshLabels[id] ?? []);
       if (scenario.change === 'armed') {
-        const arm = await client.call('act_and_observe', { action: 'tap_element', arguments: target(tree, 'native_arm'), waitMs: 0 });
+        // Preparation must publish a ready pre-change snapshot. waitMs:0 now
+        // honestly returns settling and cannot authorize the measured action.
+        const arm = await client.call('act_and_observe', { action: 'tap_element', arguments: target(tree, 'native_arm'), waitMs: 350 });
         if (!arm.ok || arm.result?.action?.accepted !== true) {
           armErrorCode = safeCode(arm.error?.code);
           armErrorReason = safeCode(arm.error?.details?.reason);
           fail('FIXTURE_ARM_FAILED');
         }
         tree = observation(arm);
+        if (tree?.readiness?.status !== 'ready' || arm.result?.observationWait?.ready !== true) fail('FIXTURE_ARM_NOT_READY');
         target(tree, targetId);
         // Ensure we actually captured before the page mutation, not an already changed page.
         const armed = await oracle();

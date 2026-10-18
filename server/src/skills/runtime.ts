@@ -125,7 +125,8 @@ export class SkillSession {
         const context = contextDigest(after);
         if (event.outcome !== "success" || step.errorCode !== "NONE" || !["get_ui_tree", "wait_for_ui_change"].includes(step.actionKind)
           || context && this.preventionBaseline && context !== this.preventionBaseline.context) this.preventionClosed = true;
-        else if (step.actionKind === "get_ui_tree") {
+        else if (step.actionKind === "get_ui_tree" || step.actionKind === "wait_for_ui_change" &&
+            object(after) && after.observationContract === "semantic-v1" && Array.isArray(after.nodes)) {
           this.preventionReads++;
           if (step.after.complete !== "yes" || !context || !object(after) || typeof after.snapshotId !== "string"
             || this.preventionReads > 2 || this.preventionReads === 2 && !this.preventionRequested) this.preventionClosed = true;

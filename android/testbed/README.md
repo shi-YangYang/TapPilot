@@ -18,6 +18,33 @@ npm run build
 
 ## Harness 接口
 
+### 双实例入口回归
+
+`native_launcher_visible` 在首屏直接展示两个同名「微信」入口；`native_launcher_paged` 的首屏没有目标，向左翻一页后展示相同入口。两者使用真实 Android View：文字节点不可点击、父容器可点击；第二个入口的无障碍描述为「微信分身，2条未读消息」。这是合成桌面测试，不是安装了微信，也不包含聊天数据。
+
+真实模型的两个场景使用同一任务：“在当前测试界面中打开第二个微信入口，确认进入对应页面后结束。这是模拟入口，不要求启动真实微信。”任务不提供路线、次数、节点 ID 或坐标。只能依据当前生产工具返回的 UI 定位；真实模型不读取 fixture/oracle。成功须独立核对 `page=destination_second`、`completed=true`、`lastTarget=launcher_second`、`clickCount=1`、`wrongClicks=0`；可见场景要求 `gestureCount=swipeCount=0`，分页场景要求二者为 1，且 `wrongGestures=cancelledGestures=0`。打开第一个或其他应用会留下不同业务页和误点计数，不能被最终回答覆盖。
+
+`native_launcher_followup` 用来防止打开入口后过早结束：第二个入口中还有「通知详情」，点开才显示合成活动时间。模型的任务要求查看通知并报告时间，不告知目标页文字、时间或节点 ID。此场景须有两次正确点按、零滑动，到达 `notice_detail`，并在最终回答中正确报告时间。回答只在内存中检查，报告只保存布尔结果。
+
+所有场景还核对行为：目标已经可见时不得请求滑动；任务要求的最终界面已返回后，不得再请求读取、等待或操作。runtime 在模型结束后自动执行的一次连续性检查单独计数，不作为模型多余读取。被拒绝的无谓滑动也会导致测试失败，不能只靠最终页面正确掩盖中间绕路。
+
+在仓库根目录运行；需要已安装并授权 TapPilot 和 testbed 的独立模拟器，以及已构建的 server。第二条命令使用电脑端已保存的模型配置。每次只运行一个场景，可将 `--case` 替换为另一场景名称；报告仅保存安全指标和 oracle 布尔值，不保存界面或模型回复。
+
+```bash
+node scripts/launcher-navigation-eval.mjs --serial emulator-5580 --case native_launcher_visible --output /tmp/launcher-visible-executor.json
+desktop/node_modules/.bin/electron desktop/scripts/evaluate-launcher-saved-model.mjs --use-saved-model --serial emulator-5580 --case native_launcher_paged --output /tmp/launcher-paged-model.json
+```
+
+2026-10-18 的定向复测使用 Android 14 模拟器与电脑端已保存的真实模型配置，通过生产运行循环和手机执行器，结果如下。三个任务均为 3 次模型请求，到达最终目标后均无模型发起的多余工具调用，只有 host 的一次收尾读取。
+
+| 场景 | 实际动作 | 耗时 | 结果 |
+|---|---|---:|---|
+| 首屏已有第二入口 | 0 次滑动、1 次实际点按 | 10.6 秒 | 通过；首个点按请求曾被 `UI_NOT_READY` 拒绝，恢复观察后成功 |
+| 下一页才有第二入口 | 1 次滑动、1 次点按 | 18.9 秒 | 通过；目标出现后未继续翻页 |
+| 打开第二入口并读取通知时间 | 0 次滑动、2 次点按 | 8.5 秒 | 通过；没有在入口页提前结束，正确报告详情时间 |
+
+对应本机脱敏报告为 `/tmp/launcher-visible-model-task-decision.json`、`/tmp/launcher-paged-model-task-decision.json`、`/tmp/launcher-followup-model-task-decision.json`。另有 72 个运行循环、完成证据、参数修正、导航与视觉边界定向测试通过。这些是合成 Android 场景中的真实模型验证，不代表真实微信或所有模型已通过；首屏就绪拒绝仍作为独立限制保留，未通过放宽手机校验掩盖。
+
 初始化场景仅启动这个合成 App，不控制其他 App、不修改系统授权：
 
 ```bash
@@ -183,7 +210,7 @@ node scripts/testbed-eval.mjs --serial emulator-5580 --mode model \
 | `timeout` | 单例超过测试时限，保留已知动作证据，不推测未观察结果 |
 | `interrupted` | 整批取消、预算用尽或清理尚未收敛；只记 attempt，续跑仍待执行 |
 
-当前 canvas 没有可访问节点，生产客户端也没有视觉操作工具，因此正确行为是安全拒绝。真实模型和 fixture 使用相同的拒绝判据；拒绝不能混入成功率。
+当前 canvas 没有可访问节点。截图可补足观察，但生产客户端仍没有视觉坐标操作，因此要求点击画布目标的任务仍应安全拒绝。真实模型和 fixture 使用相同的拒绝判据；拒绝不能混入成功率。
 
 每步只记录工具/动作枚举、已知合成目标类别、快照身份哈希、节点数、执行器派发与接受状态，以及独立业务计数前后差异。汇总的 `actionEvidence` 也统计最终成功任务中曾经发生的动作失败，不让一次重试成功掩盖拒绝率。归因是候选解释：选择了已知干扰项可指向模型选择；实际目标与请求目标矛盾可指向执行器；返回树截断可指向观察；权限或 oracle 身份问题归环境。证据不足保留 unknown，不把所有拒绝都判作手机 bug。
 
@@ -255,6 +282,188 @@ node scripts/native-executor-eval.mjs --serial emulator-5580 --scenes native_ref
 场景在首次动作前，最多等待 6 秒取得两次相隔约 100 ms、语义与几何相同的测试页，避免把启动窗口动画当作待测变化。此检查忽略快照和 revision 编号，但包含窗口、节点属性、层级与边界；持续刷新用例只在比较副本中忽略 fixture 已知计时标签的非空 text 值，仍检查其 bounds、状态、结构和其他文字，不修改传给执行器的快照。随后再跨至少四次实际刷新，只发一次待测动作。仅启动准备阶段可稳定读取；在故意更换收件人或动作失败后不重新读取/重试。「准备变化」失败会单独记录固定错误码和原因枚举。
 
 每个场景都验证新的 `runId/scene/seed`、`clickCount`、`wrongClicks`、最终业务页面或输入状态；`accepted=true` 本身不算完成。成功动作还必须返回 `executor=node-v1` 的新界面。拒绝必须命中该场景在 `native-scenarios.json` 声明的具体原因，例如目标替换必须是 `TARGET_IDENTITY_CHANGED`，重复目标必须是 `TARGET_AMBIGUOUS`；`TREE_INCOMPLETE`、协议错误、未知动作或权限失败都不能当成指定防护已通过。两条入口分别重新初始化场景，报告区分成功、预期安全拒绝和失败。此脚本只接受显式指定的模拟器，不修改系统授权，不注入 ADB 点击、输入或滑动，不记录原始 UI 和任意输入内容。
+
+## 语义观察与执行结果回归
+
+`semantic-scenarios.json` 和 `SemanticObservationScenes.kt` 把无障碍事件、可见界面变化和业务完成分别制造、分别判分。独立脚本复用原生执行器 harness 的生产客户端和启动稳定读取，不使用模型，也不在动作失败后重放动作。
+
+```bash
+node scripts/semantic-observation-eval.mjs --serial emulator-5580 \
+  --output /tmp/tappilot-semantic-observation.json
+# 参数化事件频率与延迟；只执行指定场景，保留每个 seed 的独立报告。
+node scripts/semantic-observation-eval.mjs --serial emulator-5580 \
+  --scenes semantic_event_noise,semantic_delayed,semantic_window --seeds 17,29,43
+```
+
+| 场景 | 独立验证 |
+|---|---|
+| `semantic_event_noise` | 不改变任何可见属性，持续发送内容事件；确认事件到达服务、revision 增加，但语义等待仍到期，返回 `changed=false` 和完整观察 |
+| `semantic_large_noise` | 330 个固定细行全部在可见区域，基线必须超过 300 节点且未截断；等待保持基线的 500 节点采集预算，节点数量相同且仍未截断，不把采集上限差异误报为页面变化 |
+| `semantic_blank` | 真实画布有像素，但可访问树没有文字或动作；质量为 `unavailable/no_accessible_content`，不能把未截断误判为可用 |
+| `semantic_text_only` | 只有可读文字、没有可操作控件，仍为 `usable`，支持纯读取任务 |
+| `semantic_delayed` | 原生点击准备按钮后延迟出现内容；一次等待返回变化和新内容，无须第二次读取 |
+| `semantic_selector` / `semantic_selector_visible` | 目标延迟出现与已经可见都返回 `matched` 及完整观察；已经可见时无需等待新事件 |
+| `semantic_blank_recovery` | 准备动作后先进入不可访问画布，随后真实内容出现；从不可用观察恢复为可用观察 |
+| `semantic_window` | 准备按钮触发新的真实 Dialog 窗口；等待明确返回 `window_changed`，窗口 ID 必须改变 |
+| `semantic_noop` | 原生点击被接受且业务回调恰好一次，但没有可见效果、没有完成任务；必须为 `effect=unchanged, verification=unverified` |
+| `semantic_input` | 原生中文输入回读验证成功，且私有 oracle 独立确认完整预期输入；允许 `verification=verified` |
+
+所有等待都提供本次基线 `snapshotId`；事件噪声场景还检查私有计数至少增加五次和服务 revision 实际增加，避免把“噪声没有发出来”记为通过。定时变更在准备动作之后 2.2–2.36 秒发生；报告仅保存固定枚举、计数与耗时，不保存 UI 原文。`--seeds` 只改变固定可复现时序，不表示真实 App 的全部随机行为均已覆盖。运行次数与通过数以实际报告为准。
+
+## 成熟执行器对照
+
+`executor-comparison.mjs` 对同一组原生页面分别运行 AndroidX UI Automator 2.3.0、生产桌面 PhoneClient 和 MCP ToolController。每次使用新的 runId 重置 testbed，串行执行，持有模拟器租约；仅接受在线且 `ro.kernel.qemu=1` 的明确模拟器。没有模型调用、预设点击坐标、权限数据库修改或失败动作重放。
+
+```bash
+cd android
+./gradlew :testbed:assembleDebug :testbed:assembleDebugAndroidTest
+adb -s emulator-5580 install -r testbed/build/outputs/apk/debug/testbed-debug.apk
+adb -s emulator-5580 install -r testbed/build/outputs/apk/androidTest/debug/testbed-debug-androidTest.apk
+cd ..
+node scripts/executor-comparison.mjs --serial emulator-5580 \
+  --seeds 17,29 --output /tmp/executor-comparison.json
+```
+
+前提仍是安装最新生产 APK、构建 `server/dist`，并通过正常系统设置开启 TapPilot 服务和允许控制。脚本本身不更改授权。可用 `--entries uiautomator` 或 `--entries desktop,mcp` 隔离定位；`--scenes` 选择 `reliability-scenarios.json` 中的场景。
+
+- 原生列表持续刷新、节点重建、唯一语义行重排及重排期间继续刷新。TapPilot 必须使用变化前的保留快照，不能由测试脚本重新定位掩盖失效；UI Automator 使用原 resourceId/description 条件重新查找。
+- 改名替换、重复目标、收件人改变要求未派发。**UI Automator 一侧的唯一匹配和收件人检查是基准策略显式断言，不是该库自带的业务安全能力。**
+- 点击后先为空白可访问树，650–850ms 后出现输入框；另一个变体真实吞掉内容事件。TapPilot 一次 `act_and_observe(waitFor, waitMs=1500)` 必须返回满足条件的新观察，脚本不得额外读取来修补，再执行一次中文输入。
+- 空操作只能报告未验证；复选框检查状态改变；输入框把内容同步改写时必须报告回读不匹配，不能因动作被接受就声称输入成功。
+
+业务结论来自 testbed 私有 oracle：实际点击目标、次数、最终输入枚举、开关状态和完成状态；并检查刷新/重排/吞事件确实发生。oracle 不用于选择目标，仅用于安排已定义的时间突变和独立验收，不存任意输入原文。报告区分检查通过与业务完成，安全拒绝、空操作和改写检测通过均不计作业务完成。
+
+基准将 UI Automator 的全局 idle 等待设为 0，改用目标条件等待，避免持续事件导致十秒默认等待；这是公开配置，不代表默认值的性能。`actionMs` 仅含执行与结果读取，`durationMs` 含每次启动准备；进程和采集方式不同，不把两个耗时当作精确性能竞赛。截图权限、OEM 系统和真实第三方 App 仍需另外验证。结果以实际报告为准。
+
+## 通用启动合同回归
+
+`startup-readiness-eval.mjs` 验证生产手机端的 `windowReadiness` 能力，与拼多多搜索选择器无关。需要包含新场景的 testbed debug APK，以及支持该能力的生产手机 APK 和 `server/dist`。
+
+```bash
+node scripts/startup-readiness-eval.mjs --serial emulator-5580 \
+  --entries desktop,mcp --output /tmp/startup-readiness.json
+```
+
+五个原生场景分别覆盖空树后出现文档按钮、媒体页面从屏幕外入场、标题与 ProgressBar 先到而笔记按钮延迟挂载、原生推荐列表持续刷新且外部筛选按钮延迟挂载，以及始终空白但持续发送事件的超时反例。业务标签不同，不把特定 App、中文“搜索”或固定 resourceId 传给生产就绪算法。
+
+为避免 ADB/进程启动耗时提前消耗场景，testbed 的无文字、无动作原生 probe 在第一次可访问节点采样时启动 1200ms 过渡计时。它只在测试 App 内，不是生产协议钩子。报告标记 `transitionClock=first_native_accessibility_probe`；这组测试证明首次观察后的启动过渡处理，不衡量真实 App 从进程启动到首页的全部耗时。
+
+脚本先连接生产桌面或 MCP 客户端，再启动测试窗口。确认包名后只取一次 oracle 前置样本；如果已就绪，则报告 `SETUP_MISSED_STARTUP`，不能当作通过。首次 `get_ui_tree` 不经过 `stableSetupTree`、不等待 oracle 就绪、不点准备按钮、不给目标 selector。要求返回 `readiness` 明确的 `ready/interaction_stable` 或 `settling/deadline`，在 2500ms 手机采样预算附近完成；持续刷新不能把截止时间向后推。
+
+只有首次返回观察符合就绪断言后，才从该观察选取唯一目标并请求点按一次。空白恢复、屏外入场、延迟挂载三个正常场景要求目标回调恰好一次；永久空白反例不请求动作。持续刷新列表则保留首次观察，等独立 oracle 的刷新计数再增加两次，使用原观察请求一次点按，预期 `TARGET_CHANGED / PAGE_CONTEXT_CHANGED / not_sent`，实际点击为零。它明确验证：启动等待可以不等推荐列表静止，动作执行仍然保护变化的上下文；不会为通过测试暂停列表刷新或放宽生产校验。
+
+报告分别记录 `readinessPassed`、`actionOutcome` 与 `businessCompleted`。合同验证通过不等于业务完成，安全拒绝不计入业务成功。独立 oracle 还检查提前点按、误点与重复操作为零。报告保存固定枚举、计数、耗时和就绪证据，不保存完整树或任意输入。支持 `--scenes` 指定失败场景进行定向复测。这些合成场景证明共享逻辑不依赖某个搜索页面，不能替代真实 App 与 OEM 系统测试。
+
+## 同窗口动作后过渡回归
+
+`ActionReadinessScenes.kt` 和 `action-readiness-scenarios.json` 复现 Activity/windowId 不变，但点击后 Fragment 或列表仍在挂载的情况。`action-readiness-eval.mjs` 先读取一次初始稳定页面，建立手机端的 known-window 状态，然后只发一次 `act_and_observe(tap_element, waitMs=350)`。不传 `waitFor`，不做动作后的 `get_ui_tree`、补充等待或重试。
+
+```bash
+node scripts/action-readiness-eval.mjs --serial emulator-5580 \
+  --entries desktop,mcp --output /tmp/action-readiness.json
+```
+
+五个场景分别为：
+
+- `action_multistage_editor`：中间页保留可点击临时入口，每 160ms 更换内容，600ms 后才挂载编辑器。
+- `action_delayed_scroll`：ListView 起初只有两行、不可滚动，期间外层标题持续更新，600ms 后扩展为可滚动列表。
+- `action_refreshing_collection`：同样加载列表，最终标题停止变化，列表内部继续每 70ms 更新，验证不会等待所有推荐内容静止。
+- `action_never_ready`：外层可见文字每 70ms 永久变化，必须有界返回 `settling/deadline`，不能继承点击前的 ready。
+- `action_noop`：按钮回调只更新独立 oracle，UI 完全不变，必须重新采样后及时返回 `ready/interaction_stable`，不误报界面已变化。
+
+过渡计时始于真正的按钮回调。所有场景保持同一个 Activity 和 windowId；正常场景要求**这一次动作响应**已经包含最终可编辑控件或 `scrollable:true`，并满足独立 oracle 的挂载状态。即使稍后 oracle 已就绪，响应树缺少目标也失败。列表 oracle 在实际布局可滚动后才记录完成；中间采样计数证明测试确实观察过过渡阶段。
+
+独立 oracle 先记录未点击基线，末尾核对回调恰好一次、误点为零。超时反例也只执行这一次原始动作，不因为 `settling` 重放。报告只保存固定枚举、布尔值、计数及耗时，不保存树、文字或坐标。支持 `--scenes` 对失败场景定向复测。此组依赖最新生产 receiver APK、`server/dist` 和 testbed debug APK；不需要新增 UIAutomator 测试 APK。
+
+## 已就绪窗口的延后更新回归
+
+`LateTransitionReadinessScenes.kt` 专门验证动作已经返回稳定旧页后，App 异步更新同一个窗口的情况。真实按钮回调仅安排 1400ms 后的更新，页面暂时保持不变；测试先证明初始读取与动作回包均为 ready，并通过独立 oracle 确认更新尚未开始。
+
+```bash
+node scripts/late-transition-readiness-eval.mjs --serial emulator-5580 \
+  --entries desktop,mcp --output /tmp/late-transition-readiness.json
+```
+
+随后仅轮询 oracle 的 `transitionStarted && !transitionReady`，不以固定 sleep 推断界面状态，再调用**一次** `get_ui_tree`：
+
+- `late_multistage_editor`：多个可操作的过渡页每 160ms 更换，600ms 后出现编辑器；这次读取必须重新采样并返回最终编辑器。
+- `late_loading_editor`：先显示原生 ProgressBar，600ms 后出现编辑器；已就绪缓存不能令加载页提前返回 ready。
+- `late_never_ready`：外层文字永久变化，必须在 2500ms 就绪预算内返回 `settling/deadline`。
+
+每例只有一次实际点按、两次显式 UI 读取（初始读取与待测的后续读取），没有动作重放或补读。独立 oracle 与原生中间采样计数证明测试遇到了真实过渡；若旧页阶段或过渡阶段已被错过，直接报告准备失败，不算通过。报告仅保留固定枚举、计数、布尔与耗时，不保存 UI 树。支持 `--scenes` 定向运行；需要对应 testbed debug APK 和生产 receiver APK，无需新增 instrumentation APK。
+
+## 显式状态文字声明与就绪校验兼容
+
+`DeclaredLabelReadinessScenes.kt` 验证已就绪的普通表单随后开始持续刷新时，`allowedLabelChanges` 的精确原生校验仍能授权一次局部动作。它不要求全页静止，也不能把全页伪装成 ready。
+
+```bash
+node scripts/declared-label-readiness-eval.mjs --serial emulator-5580 \
+  --entries desktop,mcp --output /tmp/declared-label-readiness.json
+```
+
+每例先读取静态页面，再真实点按一次准备按钮；该按钮只安排 1400ms 后开始每 80ms 更新非集合内的被动状态文字。测试要求准备动作的回包为 ready，独立 oracle 确认刷新尚未开始，然后保留该快照。oracle 至少观察到三次刷新后，测试使用原快照请求一次目标点按，不补读 UI、不重放动作。
+
+- `label_refresh_allowed`：只改变状态文字，并明确声明该状态节点。必须实际触发目标一次，独立业务状态完成；全页观察仍应为 `settling/deadline`，点按结果不伪报 verified。
+- `label_refresh_undeclared`：相同状态刷新，但不提供声明。必须以 `TARGET_CHANGED / PAGE_CONTEXT_CHANGED / not_sent` 拒绝，目标回调为零。
+- `label_refresh_recipient`：提供状态声明，但同时改变收件人。必须按同一拒绝原因停止，目标回调为零。
+
+准备按钮与待测目标分别计数；通过表示一次局部动作被独立验证，安全拒绝不算业务完成。报告只有固定枚举、计数、布尔和耗时，支持 `--scenes` 定向运行。此组需要更新 testbed 与 receiver APK，无需新增 instrumentation APK。
+
+## 原生 Tab 导航与持续刷新
+
+`NativeTabRefreshScenes.kt` 和 `scripts/native-tab-refresh-eval.mjs` 验证手机执行器的通用原生 Tab 路径，所有设备操作经生产桌面或 MCP 控制器。夹具使用 Android `AccessibilityDelegate` 提供真实的 Tab 角色、单行单选 `CollectionInfo` 和 `CollectionItemInfo`；没有在生产执行器中注册夹具包名、资源 ID、状态文字或时间格式。
+
+先构建并安装包含当前代码的 receiver 与 testbed debug APK，启用测试模拟器的服务，并准备当前 `server/dist`。以下是验收命令和预期条件，是否通过以实际运行报告为准：
+
+```bash
+node scripts/native-tab-refresh-eval.mjs --serial emulator-5580 \
+  --entries desktop,mcp --output /tmp/native-tab-refresh.json
+
+# 只复测进入页面即持续刷新的场景
+node scripts/native-tab-refresh-eval.mjs --serial emulator-5580 \
+  --entries desktop,mcp --scenes native_tab_initial_refresh \
+  --output /tmp/native-tab-initial-refresh.json
+```
+
+| 场景 | 实际变化与验收条件 |
+| --- | --- |
+| `native_tab_initial_refresh` | 页面进入即每 80ms 刷新栏外标签的文字和描述，没有准备按钮。首次 `get_ui_tree` 必须通过稳定采样得到 ready；保留该快照，经独立 oracle 再确认至少三次刷新，只点按一次未选中 Tab。 |
+| `native_tab_refresh` | 准备按钮只安排 1400ms 后开始每 80ms 更新状态标签。准备动作须返回 ready，且 oracle 证明刷新尚未开始；至少三次刷新后，使用该动作回包的原快照点按 Tab 一次。 |
+| `native_button_refresh` | 与延迟刷新正例相同，但目标是没有 Tab/集合角色的普通按钮。必须返回 `TARGET_CHANGED / PAGE_CONTEXT_CHANGED / not_sent`，目标回调为零。 |
+| `native_tab_recipient_refresh` | 保留真正的 Tab，但同时刷新没有 heading、pane 或标签关联标记的普通收件人 TextView。必须按同样原因拒绝，目标回调为零。 |
+
+自动路径只允许完整、未变化的原生 Tab 栏与栏外独立被动标签；完整结构、几何、状态及其他上下文照常校验。普通按钮、表单及业务上下文不能继承此豁免。就绪采样使用相同的结构条件，但 ready 本身不替代动作前目标校验。详见[执行协议](../../docs/protocol.md#快照和节点引用)。
+
+脚本不提供 `allowedLabelChanges`，不补读 UI、不替换待测快照、不重放动作。启动刷新场景只有一次目标动作，其他场景为一次准备动作加一次目标请求；准备与目标回调分别计数。成功必须同时有 `contextVerification:"native_tab_navigation"`、`allowedLabelChangesCount:0`、`automaticLabelChangesCount` 为 1～8、目标实际回调一次、新页面和已选中状态；不能只凭 Android 接受动作或 UI 变化判定完成。反例须保持目标回调为零，不计为业务成功。
+
+报告仅保存场景枚举、次数、就绪状态、刷新基线、派发/校验证据和耗时，不包含完整 UI 或模型文本。oracle 来自夹具真实回调与刷新计数，读取 oracle 不向执行器补充状态。该组是无模型的核心执行合同回归，仍需另用真实 App、真实模型验证自然调用，不能拿合成正例代替真实任务完成。
+
+## 输入后的延迟副作用
+
+此组重现输入值立即可读、周边控件延迟更新的情况。先构建并安装当前 testbed 和 receiver APK；脚本的启动准备仅等待夹具首次布局，所有待测延迟从真实 `TextWatcher` 收到输入才开始。
+
+```bash
+node scripts/input-settling-eval.mjs --serial emulator-5580 --output /tmp/input-settling.json
+node scripts/input-settling-eval.mjs --serial emulator-5580 --scenes input_geometry_800 --wait-ms 0 --output /tmp/input-zero-wait.json
+node scripts/markor-input-settling-eval.mjs --serial emulator-5580 --entry desktop --output /tmp/markor-input-settling.json
+```
+
+原生用例默认检查桌面与 MCP 两条入口：500ms 后启用 Save/Undo；800ms 后更新结果文字和高度；每 80ms 持续刷新。前两例必须在输入的首次回包中包含最终状态，然后保留该快照 3 秒，只点一次稳定搜索按钮。中途没有 UI 补读；独立 oracle 检查输入一次、正确点击一次、误点零次。持续刷新必须在原预算内返回 settling/unverified，并拒绝后续节点操作；零等待只检查一次即时观察，不要求提前出现延迟结果。
+
+Markor 脚本只用于已准备好的专用模拟器，会覆盖合成 QuickNote。两项独立实验是“异值正文输入 → Search”和“异值查询输入 → Close”，同样保留输入回包 3 秒再点按，不重放测量动作。第一项失败后，第二项可以单独准备，但第一项仍保留失败；最终另用 UI Automator 核对正文与搜索栏关闭。报告只记录固定控件角色、变化字段、计数和耗时，不保存界面文字。通过这些样本不代表任意网络加载都在 1 秒内结束。
+
+## 按需截图观察回归
+
+这组窗口截图集成用例使用无账号、Android 14 / API 34 或更新版本的专用模拟器，先按本文开头构建、安装两个 APK、启用无障碍服务并允许控制，然后构建 `server/dist`。生产支持 API 30–33 的显示屏截图并裁剪已核对的活动应用窗口；该路径目前用合成像素 instrumentation 验证裁剪，尚未完成对应系统版本的集成验证。API 30 以下明确返回不支持。官方接口见 [AccessibilityService](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService)。
+
+```bash
+# 仓库根目录；显式选择模拟器，不使用日常手机。
+node scripts/screenshot-observation-eval.mjs --serial emulator-5580
+```
+
+该定向回归检查无可访问内容的合成画布实际产生有效 JPEG、元数据与当前窗口一致，以及密码/系统保护等拒绝边界。像素只在内存验证，不写入测试报告；测试不向模型发送图片、不发起视觉坐标点击，不把“能截图”记为“模型正确理解”。运行结果以实际报告为准，API 34 通过不证明 API 30–33 已完成实机验证。
+
+桌面自动触发另由运行循环定向测试验证：可用 UI 不截图、临时空树恢复后不截图、不可读时纯文本模型明确停止、启用图片时只做一次观察、窗口变化或保护拒绝不发送图片，以及最新图片替换和次数上限。桌面每任务最多 3 次截图尝试，手机 1 秒频控，JPEG 最长边 1280 像素、至多 384 KiB。MCP 通过相同控制器返回标准图片块及无像素元数据。完整行为见 [按需截图观察协议](../../docs/protocol.md#按需截图观察)。
 
 ## 已固定的动态表单复现
 

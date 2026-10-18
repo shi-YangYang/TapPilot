@@ -27,4 +27,6 @@ androidComponents {
 dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    // A real mature-tool baseline; never shipped in the receiver APK.
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }

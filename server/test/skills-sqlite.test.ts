@@ -226,20 +226,20 @@ test("connection setup waits for a transient exclusive database lock without los
   } finally { if (!closed) lock.close(); await worker.kill(); }
 }));
 
-test("concurrent process reservations cannot overrun the daily model-call budget", { timeout: 20_000 }, async () => withRoot(async root => {
+test("concurrent process reservations preserve the job cap while exceeding the former daily cap", { timeout: 20_000 }, async () => withRoot(async root => {
   const now = Date.now(), state = legacy(now), secondEpisode = episode(2), secondId = randomUUID();
-  state.jobs[0]!.modelCalls = 150;
+  state.jobs[0]!.modelCalls = 60;
   state.jobs.push({ id: secondId, episodeId: secondEpisode.id, fingerprint: ledgerFingerprint(secondEpisode), state: "running", createdAt: now,
-    startedAt: now, ownerPid: process.pid, candidateHashes: [], feedback: [], modelCalls: 40 } as typeof state.jobs[number]);
-  state.episodes.push(secondEpisode); state.daily = { ...state.daily, jobs: 2, modelCalls: 190 };
+    startedAt: now, ownerPid: process.pid, candidateHashes: [], feedback: [], modelCalls: 140 } as typeof state.jobs[number]);
+  state.episodes.push(secondEpisode); state.daily = { ...state.daily, jobs: 2, modelCalls: 200 };
   await writeLegacy(root, state);
-  const store = new SkillStore(root); assert.equal((await store.status(now)).dailyModelCalls, 190);
+  const store = new SkillStore(root); assert.equal((await store.status(now)).dailyModelCalls, 200);
   const workers = await Promise.all(Array.from({ length: 4 }, () => startSkillWorker(root, "reserve", { jobId: secondId, calls: 5, now })));
   try {
     const outcomes = await Promise.all(workers.map(worker => worker.run()));
     assert.equal(outcomes.reduce((sum, outcome) => sum + outcome.reserved, 0), 10);
     assert.deepEqual(outcomes.flatMap(outcome => outcome.errors), Array(10).fill("SKILLS_BUDGET_EXHAUSTED"));
-    assert.equal((await new SkillStore(root).status(now)).dailyModelCalls, 200);
-    assert.deepEqual((await store.history()).jobs.map(job => job.modelCalls), [150, 50]);
+    assert.equal((await new SkillStore(root).status(now)).dailyModelCalls, 210);
+    assert.deepEqual((await store.history()).jobs.map(job => job.modelCalls), [60, 150]);
   } finally { await Promise.all(workers.map(worker => worker.kill())); }
 }));

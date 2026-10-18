@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.tappilot.testbed",
+  "activity": "dev.tappilot.testbed/.MainActivity",
+  "oraclePath": "files/oracle.json",
+  "readinessBudgetMs": 2500,
+  "waitMs": 350,
+  "transitionDelayMs": 1400,
+  "transitionClock": "delayed_after_real_button_callback",
+  "scenarios": [
+    { "id": "late_multistage_editor", "expected": "ready", "minimumPhaseCount": 5 },
+    { "id": "late_loading_editor", "expected": "ready", "minimumPhaseCount": 2 },
+    { "id": "late_never_ready", "expected": "settling", "minimumPhaseCount": 20 }
+  ]
+}

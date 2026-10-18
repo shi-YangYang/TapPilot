@@ -2,12 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { z } from "zod";
 import { deepFreeze } from "../learning/schema.js";
-import { SkillSpecSchema, SkillScopeSchema, SkillFeedbackSchema, SkillHashSchema, skillHash, semanticSkillHash, type SkillSpec, type SkillScope, type SkillFeedback } from "./schema.js";
+import { SkillSpecSchema, SkillScopeSchema, SkillFeedbackSchema, SkillHashSchema, skillHash, semanticSkillHash, matchesScope, type SkillSpec, type SkillScope, type SkillFeedback } from "./schema.js";
 import { FailureEpisodeSchema, episodeFingerprint, type FailureEpisode } from "./trace.js";
 import { verifySkillReceipt, type SkillReceipt } from "./evaluation.js";
 import { SkillFailureSchema, type SkillFailure } from "./failure.js";
 import { SkillDatabase } from "./database.js";
 import { JobSchema, RecordSchema, MAX_BYTES } from "./store-schema.js";
+import { ManagedSkillInputSchema, type ManagedSkill, type ManagedSkillInput } from "./management.js";
+export type { ManagedSkill, ManagedSkillInput } from "./management.js";
 
 export type SkillJob = z.infer<typeof JobSchema>;
 type SkillRecord = z.infer<typeof RecordSchema>;
@@ -81,7 +83,7 @@ function trim(db: DatabaseSync) {
   db.exec("DELETE FROM episodes WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.episode_id = episodes.id)");
   const extraSkills = count(db.prepare("SELECT count(*) AS count FROM skills").get()) - 128;
   if (extraSkills > 0) {
-    const removed = db.prepare("DELETE FROM skills WHERE seq IN (SELECT seq FROM skills WHERE state IN ('rejected', 'revoked') ORDER BY seq LIMIT ?)").run(extraSkills);
+    const removed = db.prepare("DELETE FROM skills WHERE seq IN (SELECT seq FROM skills WHERE state IN ('rejected', 'revoked') AND NOT EXISTS (SELECT 1 FROM managed_skills WHERE managed_skills.skill_hash = skills.hash) ORDER BY seq LIMIT ?)").run(extraSkills);
     if (Number(removed.changes) !== extraSkills) throw new Error("SKILLS_STORE_LIMIT");
   }
 }
@@ -111,7 +113,8 @@ function assertCapacity(db: DatabaseSync) {
       + episode_sizes.bytes + job_sizes.bytes + skill_sizes.bytes AS count
     FROM metadata, episode_sizes, job_sizes, skill_sizes WHERE metadata.id = 1
   `).get());
-  if (bytes > MAX_BYTES) throw new Error("SKILLS_STORE_LIMIT");
+  const managedBytes = count(db.prepare("SELECT coalesce(sum(length(CAST(spec_json AS BLOB)) + length(CAST(title AS BLOB)) + 256), 0) AS count FROM managed_skills").get());
+  if (bytes + managedBytes > MAX_BYTES) throw new Error("SKILLS_STORE_LIMIT");
 }
 function revokeSkills(db: DatabaseSync, hashes: readonly string[], now: number) {
   const records = hashes.flatMap(hash => { const record = getRecord(db, hash); return record ? [record] : []; });
@@ -154,16 +157,165 @@ function interruptDeadJobs(db: DatabaseSync, now: number, rejectCandidates: bool
   }
 }
 
+function insertCandidate(db: DatabaseSync, jobId: string, spec: SkillSpec, now: number): string {
+  const hash = skillHash(spec), semanticHash = semanticSkillHash(spec);
+  const job = getJob(db, jobId), episodeRow = job && db.prepare("SELECT episode_json FROM episodes WHERE id = ?").get(job.episodeId);
+  if (!job || job.state !== "running" || !episodeRow) throw new Error("SKILLS_JOB_CANCELLED");
+  const episode = stored(FailureEpisodeSchema, json(episodeRow.episode_json));
+  if (episode.id !== job.episodeId) throw new Error("SKILLS_INVALID_STORE");
+  if (job.candidateHashes.length >= 2 || spec.expiresAt <= now || spec.expiresAt > now + 90 * 86_400_000 || encoded(spec.scope) !== encoded(episode.scope) || encoded(spec.trigger) !== encoded(episode.trigger)) throw new Error("SKILLS_INVALID_CANDIDATE");
+  if (db.prepare("SELECT 1 FROM skills WHERE semantic_hash = ? LIMIT 1").get(semanticHash)) throw new Error("SKILLS_DUPLICATE_CANDIDATE");
+  if (spec.lineage.parentHash && !db.prepare("SELECT 1 FROM skills WHERE hash = ?").get(spec.lineage.parentHash)) throw new Error("SKILLS_UNKNOWN_PARENT");
+  stored(RecordSchema, { spec, hash, state: "candidate", jobId, createdAt: now, successes: 0, failures: 0 });
+  db.prepare("UPDATE jobs SET candidate_hashes_json = ? WHERE id = ?").run(encoded([...job.candidateHashes, hash]), jobId);
+  db.prepare(`INSERT INTO skills (hash, semantic_hash, state, job_id, created_at, successes, failures, host_version, policy_revision, model_profile, app_digest, expires_at, scope_json, trigger_json, spec_json)
+    VALUES (?, ?, 'candidate', ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(hash, semanticHash, jobId, now, spec.scope.hostVersion, spec.scope.policyRevision, spec.scope.modelProfile, spec.scope.appDigest ?? null, spec.expiresAt, encoded(spec.scope), encoded(spec.trigger), encoded(spec));
+  trim(db);
+  assertCapacity(db);
+  return hash;
+}
+
+function managedFromRow(db: DatabaseSync, row: Row): ManagedSkill {
+  const input = stored(ManagedSkillInputSchema, { title: row.title, spec: json(row.spec_json) });
+  const source = stored(z.enum(["manual", "automatic"]), row.source);
+  const record = typeof row.skill_hash === "string" ? getRecord(db, row.skill_hash) : undefined;
+  if (row.skill_hash !== null && !record || record && encoded(record.spec) !== encoded(input.spec)) throw new Error("SKILLS_INVALID_STORE");
+  const timestamp = z.number().int().nonnegative();
+  return { id: stored(z.string().min(1).max(80), row.id), ...input, source,
+    state: record?.state ?? stored(z.enum(["draft", "rejected"]), row.draft_state), createdAt: stored(timestamp, row.created_at), updatedAt: stored(timestamp, row.updated_at),
+    successes: record?.successes ?? 0, failures: record?.failures ?? 0, ...(record?.validation ? { validation: record.validation } : {}) };
+}
+function automaticManaged(record: SkillRecord): ManagedSkill {
+  return { id: record.hash, title: `${record.spec.trigger.errorCode} · ${record.spec.trigger.actionKind}`, source: "automatic",
+    state: record.state, spec: record.spec, createdAt: record.createdAt, updatedAt: record.createdAt,
+    successes: record.successes, failures: record.failures, ...(record.validation ? { validation: record.validation } : {}) };
+}
+function managedById(db: DatabaseSync, id: string): ManagedSkill | undefined {
+  const row = db.prepare("SELECT * FROM managed_skills WHERE id = ?").get(id);
+  if (row) return managedFromRow(db, row);
+  const record = getRecord(db, id);
+  if (record && !db.prepare("SELECT 1 FROM managed_skills WHERE skill_hash = ?").get(id)) return automaticManaged(record);
+  return undefined;
+}
+function checkedManagedInput(input: ManagedSkillInput, now?: number): ManagedSkillInput {
+  const parsed = ManagedSkillInputSchema.safeParse(input);
+  if (!parsed.success || now !== undefined && (parsed.data.spec.expiresAt <= now || parsed.data.spec.expiresAt > now + 90 * 86_400_000)) throw new Error("SKILLS_INVALID_MANAGED_SKILL");
+  return parsed.data;
+}
+function checkManagedDuplicate(db: DatabaseSync, spec: SkillSpec, exceptId?: string): void {
+  const semantic = semanticSkillHash(spec);
+  const duplicate = db.prepare("SELECT hash FROM skills WHERE semantic_hash = ?").get(semantic);
+  const current = exceptId ? managedById(db, exceptId) : undefined;
+  if (duplicate && duplicate.hash !== (current ? skillHash(current.spec) : undefined)) throw new Error("SKILLS_DUPLICATE_CANDIDATE");
+  for (const row of db.prepare("SELECT id, spec_json FROM managed_skills WHERE skill_hash IS NULL").all()) {
+    if (row.id !== exceptId && semanticSkillHash(stored(SkillSpecSchema, json(row.spec_json))) === semantic) throw new Error("SKILLS_DUPLICATE_CANDIDATE");
+  }
+  if (spec.lineage.parentHash && !getRecord(db, spec.lineage.parentHash)) throw new Error("SKILLS_UNKNOWN_PARENT");
+}
+/** A draft may only be tested against an actual, sanitized failure already in the
+ * ledger. Its own identity deduplicates that evaluation; it is never active here. */
+function enqueueManagedDrafts(db: DatabaseSync, now: number): void {
+  if (!enabled(db)) return;
+  const drafts = db.prepare("SELECT * FROM managed_skills WHERE source = 'manual' AND draft_state = 'draft' AND skill_hash IS NULL AND job_id IS NULL ORDER BY created_at").all();
+  if (!drafts.length) return;
+  const episodes = db.prepare("SELECT episode_json FROM episodes ORDER BY seq DESC").all().map(row => stored(FailureEpisodeSchema, json(row.episode_json)));
+  for (const draft of drafts) {
+    const spec = stored(SkillSpecSchema, json(draft.spec_json));
+    if (spec.expiresAt <= now) continue;
+    const episode = episodes.find(value => value.termination !== "cancelled" && value.steps.some(step => !["NONE", "UNKNOWN"].includes(step.errorCode)) && matchesScope(spec.scope, value.scope) && encoded(value.trigger) === encoded(spec.trigger));
+    if (!episode) continue;
+    // Bind a broad manual draft to one observed app before any evaluation.
+    // Subsequent candidates and receipts retain the exact existing scope checks.
+    const bound = SkillSpecSchema.parse({ ...spec, scope: episode.scope });
+    if (db.prepare("SELECT 1 FROM skills WHERE semantic_hash = ?").get(semanticSkillHash(bound))) {
+      db.prepare("UPDATE managed_skills SET spec_json = ?, draft_state = 'rejected', updated_at = ? WHERE id = ?").run(encoded(bound), now, draft.id!);
+      continue;
+    }
+    const id = randomUUID(), fingerprint = createHash("sha256").update(encoded(["managed", draft.id, skillHash(bound), id])).digest("hex");
+    db.prepare("INSERT INTO jobs (id, episode_id, fingerprint, state, created_at, candidate_hashes_json, feedback_json, model_calls) VALUES (?, ?, ?, 'queued', ?, '[]', '[]', 0)").run(id, episode.id, fingerprint, now);
+    db.prepare("UPDATE managed_skills SET job_id = ?, spec_json = ? WHERE id = ?").run(id, encoded(bound), draft.id!);
+    // The manually supplied candidate replaces redundant automatic generation
+    // for this same queued evidence; other distinct failures remain queued.
+    db.prepare("UPDATE jobs SET state = 'cancelled', finished_at = ? WHERE episode_id = ? AND state = 'queued' AND id <> ? AND NOT EXISTS (SELECT 1 FROM managed_skills WHERE managed_skills.job_id = jobs.id)").run(now, episode.id, id);
+  }
+}
+function withdrawManaged(db: DatabaseSync, current: ManagedSkill, now: number): void {
+  const row = db.prepare("SELECT job_id, skill_hash FROM managed_skills WHERE id = ?").get(current.id);
+  const hash = row?.skill_hash ?? (current.state !== "draft" ? skillHash(current.spec) : undefined);
+  const jobId = row?.job_id ?? (typeof hash === "string" ? getRecord(db, hash)?.jobId : undefined);
+  if (typeof jobId === "string") {
+    db.prepare("UPDATE jobs SET state = 'cancelled', finished_at = ?, last_failure_json = ? WHERE id = ? AND state IN ('queued', 'running')")
+      .run(now, encoded({ stage: "lifecycle", code: "SKILLS_CANCELLED" }), jobId);
+    db.prepare("UPDATE skills SET state = 'rejected' WHERE job_id = ? AND state = 'candidate'").run(jobId);
+  }
+  // Remove the old executable identity so a concurrent receipt cannot adopt it,
+  // and rollback cannot resurrect a skill explicitly deleted by the user.
+  if (typeof hash === "string") db.prepare("DELETE FROM skills WHERE hash = ?").run(hash);
+  db.prepare("DELETE FROM managed_skills WHERE id = ?").run(current.id);
+}
+
 export type StoreStatus = { enabled: boolean; activeSkills: number; queued: number; dailyJobs: number; dailyModelCalls: number; lastFailure?: SkillFailure };
 
 /** Persistence accepts only closed-schema structural facts and procedural programs.
- * API keys, task prose, UI labels and model responses have no representable fields.
+ * Evidence and programs cannot represent API keys, task prose, UI labels or model responses.
+ * User-supplied management titles are separate display metadata, never prompts.
  * Tasks receive frozen in-memory snapshots; counters and lifecycle writes only
  * update their own SQLite rows inside one transaction. */
 export class SkillStore {
   readonly directory: string;
   private readonly database: SkillDatabase;
   constructor(rootDirectory: string) { this.database = new SkillDatabase(rootDirectory); this.directory = this.database.directory; }
+  async listManagedSkills(): Promise<readonly ManagedSkill[]> {
+    return this.database.read(db => deepFreeze([
+      ...db.prepare("SELECT * FROM managed_skills").all().map(row => managedFromRow(db, row)),
+      ...db.prepare("SELECT skills.* FROM skills WHERE NOT EXISTS (SELECT 1 FROM managed_skills WHERE managed_skills.skill_hash = skills.hash)").all().map(recordFromRow).map(automaticManaged),
+    ].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))));
+  }
+  async createManagedSkill(input: ManagedSkillInput): Promise<ManagedSkill> {
+    const now = Date.now(), safe = checkedManagedInput(input, now);
+    return this.database.write(db => {
+      if (count(db.prepare("SELECT count(*) AS count FROM managed_skills").get()) >= 128) throw new Error("SKILLS_STORE_LIMIT");
+      checkManagedDuplicate(db, safe.spec);
+      const id = randomUUID();
+      db.prepare("INSERT INTO managed_skills (id,title,source,spec_json,created_at,updated_at) VALUES (?,?,'manual',?,?,?)").run(id, safe.title, encoded(safe.spec), now, now);
+      enqueueManagedDrafts(db, now); trim(db); assertCapacity(db);
+      return deepFreeze(managedById(db, id)!);
+    });
+  }
+  async updateManagedSkill(id: string, input: ManagedSkillInput): Promise<ManagedSkill> {
+    const now = Date.now(), safe = checkedManagedInput(input);
+    if (typeof id !== "string" || id.length > 80) throw new Error("SKILLS_NOT_FOUND");
+    return this.database.write(db => {
+      const current = managedById(db, id);
+      if (!current) throw new Error("SKILLS_NOT_FOUND");
+      if (encoded(safe.spec.scope) !== encoded(current.spec.scope)) throw new Error("SKILLS_INVALID_MANAGED_SKILL");
+      if (skillHash(safe.spec) !== skillHash(current.spec) && safe.spec.lineage.parentHash === skillHash(current.spec)) throw new Error("SKILLS_UNKNOWN_PARENT");
+      checkManagedDuplicate(db, safe.spec, id);
+      if (skillHash(safe.spec) === skillHash(current.spec)) {
+        // Renaming display metadata neither invalidates nor grants validation.
+        const existing = db.prepare("SELECT 1 FROM managed_skills WHERE id = ?").get(id);
+        if (existing) db.prepare("UPDATE managed_skills SET title = ?, updated_at = ? WHERE id = ?").run(safe.title, now, id);
+        else db.prepare("INSERT INTO managed_skills (id,title,source,spec_json,skill_hash,job_id,created_at,updated_at) VALUES (?,?,'automatic',?,?,?,?,?)")
+          .run(id, safe.title, encoded(safe.spec), id, getRecord(db, id)!.jobId, current.createdAt, now);
+      } else {
+        checkedManagedInput(safe, now);
+        withdrawManaged(db, current, now);
+        db.prepare("INSERT INTO managed_skills (id,title,source,spec_json,created_at,updated_at) VALUES (?,?,'manual',?,?,?)").run(id, safe.title, encoded(safe.spec), current.createdAt, now);
+        enqueueManagedDrafts(db, now); trim(db);
+      }
+      assertCapacity(db);
+      return deepFreeze(managedById(db, id)!);
+    });
+  }
+  async deleteManagedSkill(id: string): Promise<void> {
+    if (typeof id !== "string" || id.length > 80) throw new Error("SKILLS_NOT_FOUND");
+    await this.database.write(db => {
+      const current = managedById(db, id);
+      if (!current) throw new Error("SKILLS_NOT_FOUND");
+      withdrawManaged(db, current, Date.now());
+    });
+  }
   async status(now = Date.now()): Promise<StoreStatus> {
     return this.database.read(db => {
       const metadata = db.prepare("SELECT enabled, daily_day, daily_jobs, daily_model_calls FROM metadata WHERE id = 1").get();
@@ -182,6 +334,12 @@ export class SkillStore {
     if (typeof value !== "boolean") throw new Error("SKILLS_INVALID_STATE");
     await this.database.write(db => {
       db.prepare("UPDATE metadata SET enabled = ? WHERE id = 1").run(value ? 1 : 0);
+      if (value) {
+        // An explicitly resumed, never-dispatched draft may reuse its queue
+        // reservation. Already evaluated/interrupted attempts are never replayed.
+        db.exec("UPDATE jobs SET state = 'queued', finished_at = NULL, last_failure_json = NULL WHERE state = 'cancelled' AND started_at IS NULL AND EXISTS (SELECT 1 FROM managed_skills WHERE managed_skills.job_id = jobs.id AND managed_skills.skill_hash IS NULL)");
+        enqueueManagedDrafts(db, Date.now());
+      }
       if (!value) db.prepare("UPDATE jobs SET state = 'cancelled', finished_at = ?, last_failure_json = ? WHERE state = 'queued'")
         .run(Date.now(), encoded({ stage: "lifecycle", code: "SKILLS_CANCELLED" }));
     });
@@ -214,6 +372,7 @@ export class SkillStore {
       db.prepare("INSERT INTO episodes (id, model_profile, episode_json) VALUES (?, ?, ?)").run(episode.id, episode.scope.modelProfile, encoded(episode));
       db.prepare("INSERT INTO jobs (id, episode_id, fingerprint, state, created_at, candidate_hashes_json, feedback_json, model_calls) VALUES (?, ?, ?, ?, ?, '[]', '[]', 0)")
         .run(job.id, job.episodeId, job.fingerprint, job.state, job.createdAt);
+      enqueueManagedDrafts(db, now);
       trim(db);
       assertCapacity(db);
       return { id: job.id, queued };
@@ -222,15 +381,18 @@ export class SkillStore {
   async recoverInterrupted(now = Date.now()): Promise<void> {
     await this.database.write(db => interruptDeadJobs(db, now, true));
   }
-  async beginJob(modelProfile: string, now = Date.now()): Promise<{ job: SkillJob; episode: FailureEpisode; parent?: SkillSpec } | undefined> {
+  async beginJob(modelProfile: string, now = Date.now()): Promise<{ job: SkillJob; episode: FailureEpisode; parent?: SkillSpec; candidate?: { hash: string; spec: SkillSpec } } | undefined> {
     SkillHashSchema.parse(modelProfile);
     return this.database.write(db => {
       resetDay(db, now);
       // Crashed reservations remain consumed; partially evaluated work never replays.
       interruptDeadJobs(db, now, false);
       const metadata = db.prepare("SELECT enabled, daily_jobs, daily_model_calls FROM metadata WHERE id = 1").get();
-      if (!metadata || metadata.enabled !== 1 || Number(metadata.daily_jobs) >= 2 || Number(metadata.daily_model_calls) >= 200 || db.prepare("SELECT 1 FROM jobs WHERE state = 'running' LIMIT 1").get()) return undefined;
-      const row = db.prepare("SELECT jobs.* FROM jobs JOIN episodes ON episodes.id = jobs.episode_id WHERE jobs.state = 'queued' AND episodes.model_profile = ? ORDER BY jobs.seq LIMIT 1").get(modelProfile);
+      if (!metadata || metadata.enabled !== 1 || db.prepare("SELECT 1 FROM jobs WHERE state = 'running' LIMIT 1").get()) return undefined;
+      db.prepare("UPDATE managed_skills SET draft_state = 'rejected' WHERE skill_hash IS NULL AND json_extract(spec_json, '$.expiresAt') <= ?").run(now);
+      db.prepare("UPDATE jobs SET state = 'cancelled', finished_at = ? WHERE state = 'queued' AND EXISTS (SELECT 1 FROM managed_skills WHERE managed_skills.job_id = jobs.id AND managed_skills.draft_state = 'rejected')").run(now);
+      for (;;) {
+      const row = db.prepare("SELECT jobs.* FROM jobs JOIN episodes ON episodes.id = jobs.episode_id WHERE jobs.state = 'queued' AND episodes.model_profile = ? ORDER BY EXISTS(SELECT 1 FROM managed_skills WHERE managed_skills.job_id = jobs.id) DESC, jobs.seq LIMIT 1").get(modelProfile);
       if (!row) return undefined;
       const job = jobFromRow(row);
       const episode = stored(FailureEpisodeSchema, json(db.prepare("SELECT episode_json FROM episodes WHERE id = ?").get(job.episodeId)?.episode_json));
@@ -248,7 +410,23 @@ export class SkillStore {
           .get(now, ...scopeParameters(episode.scope), encoded(episode.trigger));
         if (active) parent = recordFromRow(active).spec;
       }
-      return deepFreeze({ job: started, episode, ...(parent ? { parent } : {}) });
+      const managed = db.prepare("SELECT * FROM managed_skills WHERE job_id = ? AND skill_hash IS NULL").get(job.id);
+      let candidate: { hash: string; spec: SkillSpec } | undefined;
+      if (managed) {
+        const spec = stored(SkillSpecSchema, json(managed.spec_json));
+        let hash: string;
+        try { hash = insertCandidate(db, job.id, spec, now); }
+        catch (error) {
+          if (!(error instanceof Error) || !["SKILLS_DUPLICATE_CANDIDATE", "SKILLS_INVALID_CANDIDATE", "SKILLS_UNKNOWN_PARENT"].includes(error.message)) throw error;
+          db.prepare("UPDATE jobs SET state = 'rejected', finished_at = ?, last_failure_json = ? WHERE id = ?").run(now, encoded({ stage: "lifecycle", code: "SKILLS_JOB_FAILED" }), job.id);
+          db.prepare("UPDATE managed_skills SET draft_state = 'rejected', updated_at = ? WHERE id = ?").run(now, managed.id!);
+          continue;
+        }
+        db.prepare("UPDATE managed_skills SET skill_hash = ?, updated_at = ? WHERE id = ?").run(hash, now, managed.id!);
+        candidate = { hash, spec };
+      }
+      return deepFreeze({ job: getJob(db, job.id) ?? started, episode, ...(parent ? { parent } : {}), ...(candidate ? { candidate } : {}) });
+      }
     });
   }
   async reserveModelCall(jobId: string, now = Date.now(), budget: 100 | 150 = 100): Promise<void> {
@@ -258,31 +436,16 @@ export class SkillStore {
       const job = db.prepare("SELECT state, model_calls FROM jobs WHERE id = ?").get(jobId);
       const metadata = db.prepare("SELECT enabled, daily_model_calls FROM metadata WHERE id = 1").get();
       if (!job || job.state !== "running" || metadata?.enabled !== 1) throw new Error("SKILLS_JOB_CANCELLED");
-      if (Number(job.model_calls) >= budget || Number(metadata.daily_model_calls) >= 200) throw new Error("SKILLS_BUDGET_EXHAUSTED");
+      if (Number(job.model_calls) >= budget) throw new Error("SKILLS_BUDGET_EXHAUSTED");
       db.prepare("UPDATE jobs SET model_calls = model_calls + 1 WHERE id = ?").run(jobId);
       db.prepare("UPDATE metadata SET daily_model_calls = daily_model_calls + 1 WHERE id = 1").run();
     });
   }
   async addCandidate(jobId: string, input: unknown, now = Date.now()): Promise<string> {
-    const spec = SkillSpecSchema.parse(input), hash = skillHash(spec), semanticHash = semanticSkillHash(spec);
-    return this.database.write(db => {
-      const job = getJob(db, jobId), episodeRow = job && db.prepare("SELECT episode_json FROM episodes WHERE id = ?").get(job.episodeId);
-      if (!job || job.state !== "running" || !episodeRow) throw new Error("SKILLS_JOB_CANCELLED");
-      const episode = stored(FailureEpisodeSchema, json(episodeRow.episode_json));
-      if (episode.id !== job.episodeId) throw new Error("SKILLS_INVALID_STORE");
-      if (job.candidateHashes.length >= 2 || spec.expiresAt <= now || spec.expiresAt > now + 90 * 86_400_000 || encoded(spec.scope) !== encoded(episode.scope) || encoded(spec.trigger) !== encoded(episode.trigger)) throw new Error("SKILLS_INVALID_CANDIDATE");
-      if (db.prepare("SELECT 1 FROM skills WHERE semantic_hash = ? LIMIT 1").get(semanticHash)) throw new Error("SKILLS_DUPLICATE_CANDIDATE");
-      if (spec.lineage.parentHash && !db.prepare("SELECT 1 FROM skills WHERE hash = ?").get(spec.lineage.parentHash)) throw new Error("SKILLS_UNKNOWN_PARENT");
-      stored(RecordSchema, { spec, hash, state: "candidate", jobId, createdAt: now, successes: 0, failures: 0 });
-      db.prepare("UPDATE jobs SET candidate_hashes_json = ? WHERE id = ?").run(encoded([...job.candidateHashes, hash]), jobId);
-      db.prepare(`INSERT INTO skills (hash, semantic_hash, state, job_id, created_at, successes, failures, host_version, policy_revision, model_profile, app_digest, expires_at, scope_json, trigger_json, spec_json)
-        VALUES (?, ?, 'candidate', ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(hash, semanticHash, jobId, now, spec.scope.hostVersion, spec.scope.policyRevision, spec.scope.modelProfile, spec.scope.appDigest ?? null, spec.expiresAt, encoded(spec.scope), encoded(spec.trigger), encoded(spec));
-      trim(db);
-      assertCapacity(db);
-      return hash;
-    });
+    const spec = SkillSpecSchema.parse(input);
+    return this.database.write(db => insertCandidate(db, jobId, spec, now));
   }
+
   async rejectCandidate(jobId: string, input: SkillFeedback): Promise<void> {
     const feedback = SkillFeedbackSchema.parse(input);
     await this.database.write(db => {

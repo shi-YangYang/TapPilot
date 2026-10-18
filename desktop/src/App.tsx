@@ -1,4 +1,4 @@
-import { ArrowUpRight, Battery, Bot, Check, ChevronRight, Copy, Layers2, LockKeyhole, Moon, Play, RefreshCw, Smartphone, Square, Sun, Text, Usb, Wifi } from 'lucide-react';
+import { ArrowUpRight, Battery, Bot, Check, ChevronRight, Copy, Layers2, LockKeyhole, Moon, Play, RefreshCw, Smartphone, Sparkles, Square, Sun, Text, Usb, Wifi } from 'lucide-react';
 import { PromptInput } from '@/components/agents/prompt-input';
 import { AgentActivity, type AgentActivityItem } from '@/components/agents/agent-activity';
 import { Button } from '@/components/motion/button';
@@ -10,7 +10,7 @@ import { Tooltip, TooltipProvider } from '@/components/motion/tooltip';
 import type { ConnectionMode, PageName } from './client-types';
 import { useClient, type ClientController } from './use-client';
 import { useTheme } from './use-theme';
-import { improvementStatusText } from './improvement-copy';
+import { ImprovementPage } from './ImprovementPage';
 
 const prompts = [
   { label: '查看电池', icon: Battery, text: '打开系统设置，进入电池页面，告诉我当前显示了什么。' },
@@ -84,18 +84,13 @@ function ModelPage({ client: c }: { client: ClientController }) {
           <Input id="base-url" label="API 地址" type="url" value={c.draft.baseUrl} onChange={value => field('baseUrl', value)} placeholder="https://api.example.com/v1" maxLength={2048} autoComplete="off" required disabled={locked} />
           <Input id="model-name" label="模型名称" value={c.draft.model} onChange={value => field('model', value)} placeholder="填写服务商提供的模型 ID" maxLength={200} autoComplete="off" required disabled={locked} />
           <div><Input id="api-key" label="API Key" type="password" value={c.draft.apiKey} onChange={value => field('apiKey', value)} placeholder={c.config.hasKey ? '留空保留已保存密钥' : '输入密钥'} maxLength={8192} autoComplete="new-password" disabled={locked} /><div className="key-details"><span id="key-status">{c.config.hasKey ? '已加密保存' : '尚未保存'}</span><label><input id="clear-key" type="checkbox" checked={c.draft.clearKey} onChange={event => c.setDraft(previous => ({ ...previous, clearKey: event.target.checked }))} disabled={locked} />清除密钥</label></div></div>
+          <div><label className="flex items-center gap-2"><input id="model-vision" type="checkbox" checked={c.draft.vision} onChange={event => c.setDraft(previous => ({ ...previous, vision: event.target.checked }))} disabled={locked} aria-describedby="model-vision-hint" />支持图片</label><p id="model-vision-hint" className="field-hint">界面无法读取时，发送截图给模型。</p></div>
         </CardContent>
         <CardFooter className="form-footer"><span className="local-key"><LockKeyhole className="size-3.5" />密钥加密保存在本机</span><Button id="test-model" variant="outline" disabled={locked} onClick={() => void c.testModel()}>{c.testing ? '测试中…' : '测试连接'}</Button><Button id="save-model" type="submit" disabled={locked}>{c.saving ? '保存中…' : '保存'}</Button></CardFooter>
         {c.modelTestResult && <CardContent><p id="model-test-result" className="inline-result" role="status">{c.modelTestResult}</p></CardContent>}
       </Card>
     </form>
     <p className="privacy-caption">任务和必要的手机界面信息会发送到此服务。</p>
-    <Card className="settings-card">
-      <CardHeader><CardTitle as="h2">自动改进</CardTitle><CardDescription>从失败中学习，通过测试后用于后续任务。</CardDescription><CardAction><Button id="improvement-toggle" variant="outline" aria-pressed={c.improvement.enabled} disabled={!c.ready || c.improvementBusy} onClick={() => void c.toggleImprovement()}>{c.improvement.enabled ? '已开启' : '已关闭'}</Button></CardAction></CardHeader>
-      <CardContent><p id="improvement-status" className="inline-result" role="status">{improvementStatusText(c.improvement)} · {c.improvement.activeSkills} 项有效技能</p></CardContent>
-      <CardFooter className="form-footer"><span className="local-key">使用当前模型，可能产生费用</span><Button id="improvement-rollback" variant="outline" disabled={!c.improvement.activeSkills || c.improvementBusy || c.busy} onClick={() => void c.rollbackImprovement()}>撤回改进</Button></CardFooter>
-    </Card>
-    <details className="help-details"><summary>填写说明与自动改进</summary><p>自动改进只在空闲时运行，每天最多 2 轮、200 次模型请求。测试使用电脑内的合成界面或专用 Android 模拟器，不操作日常使用的手机。仅保存不含文字的结构与错误记录；聊天、输入内容和截图不进入经验库。可随时关闭，停止任务也会取消后台改进。</p><p>同一服务的密钥留空可保留。更换地址的域名或端口会清除旧密钥，请填写新服务的密钥。</p><p>本机模型可用 http://localhost:端口/v1，无鉴权时密钥可留空。测试连接成功后，可先运行“总结界面”。</p></details>
   </section>;
 }
 function WirelessPanel({ client: c }: { client: ClientController }) {
@@ -134,7 +129,7 @@ function DevicePage({ client: c }: { client: ClientController }) {
 export function App() {
   const c = useClient();
   const { theme, themeError, toggleTheme } = useTheme();
-  const pages = [{ value: 'task', label: '任务', icon: Layers2 }, { value: 'model', label: '模型', icon: Bot }, { value: 'device', label: '设备', icon: Smartphone }] as const;
+  const pages = [{ value: 'task', label: '任务', icon: Layers2 }, { value: 'model', label: '模型', icon: Bot }, { value: 'device', label: '设备', icon: Smartphone }, { value: 'improvement', label: '自动改进', icon: Sparkles }] as const;
   return <TooltipProvider><div className="app-shell"><div className="window-drag" /><Tabs variant="underline" className="app-layout" value={c.page} onValueChange={value => c.setPage(value as PageName)}>
     <aside className="app-sidebar">
       <div className="brand"><span className="brand-mark" aria-hidden="true">T</span>TapPilot</div>
@@ -143,7 +138,7 @@ export function App() {
     </aside>
     <div className="workspace">
       <header className="workspace-header"><span className="workspace-title">{pages.find(page => page.value === c.page)?.label}</span><div className="workspace-actions"><Button variant="ghost" size="sm" data-goto="device" onClick={() => c.setPage('device')} className="connection-button"><span id="connection-dot" className="connection-dot" data-connected={c.connected} /><span id="connection-label" className="truncate">{c.connected ? `${c.deviceName} · ${c.mode === 'wireless' ? '无线' : 'USB'}` : '连接手机'}</span><ChevronRight className="size-3" /></Button><span className="header-divider" /><Tooltip content="立即停止手机自动化；之后需在手机上恢复。"><Button id="emergency-button" variant="ghost" size="sm" disabled={c.stopping || !c.ready} onClick={() => void c.emergency()}><Square className="size-3" />紧急停止</Button></Tooltip></div></header>
-      <main className="app-main"><div id="notice" role="status" className="app-notice" data-error={c.notice.error} hidden={!c.notice.text}>{c.notice.text}</div><TabsContent value="task" className="page-content"><TaskPage client={c} /></TabsContent><TabsContent value="model" className="page-content"><ModelPage client={c} /></TabsContent><TabsContent value="device" className="page-content"><DevicePage client={c} /></TabsContent></main>
+      <main className="app-main"><div id="notice" role="status" className="app-notice" data-error={c.notice.error} hidden={!c.notice.text}>{c.notice.text}</div><TabsContent value="task" className="page-content"><TaskPage client={c} /></TabsContent><TabsContent value="model" className="page-content"><ModelPage client={c} /></TabsContent><TabsContent value="device" className="page-content"><DevicePage client={c} /></TabsContent><ImprovementPage client={c} /></main>
     </div>
   </Tabs></div></TooltipProvider>;
 }

@@ -16,13 +16,25 @@ const invalid = (): never => { throw new Error("SKILLS_INVALID_STORE"); };
 const safeError = (error: unknown) => new Error(error instanceof Error && /^SKILLS_[A-Z_]+$/.test(error.message)
   ? error.message : error && typeof error === "object" && "errcode" in error && [11, 19, 26].includes(Number(error.errcode) & 255)
     ? "SKILLS_INVALID_STORE" : "SKILLS_STORAGE_UNAVAILABLE");
-const schema = `
-CREATE TABLE metadata (
-  id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=1),
-  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)), daily_day TEXT NOT NULL,
-  daily_jobs INTEGER NOT NULL CHECK(daily_jobs BETWEEN 0 AND 2),
-  daily_model_calls INTEGER NOT NULL CHECK(daily_model_calls BETWEEN 0 AND 200), legacy_sha256 TEXT
+const managementSchema = `
+CREATE TABLE managed_skills (
+  id TEXT PRIMARY KEY, title TEXT NOT NULL, source TEXT NOT NULL CHECK(source IN ('manual','automatic')),
+  spec_json TEXT NOT NULL, skill_hash TEXT UNIQUE, job_id TEXT,
+  draft_state TEXT NOT NULL DEFAULT 'draft' CHECK(draft_state IN ('draft','rejected')),
+  created_at INTEGER NOT NULL CHECK(created_at>=0), updated_at INTEGER NOT NULL CHECK(updated_at>=0)
 ) STRICT;
+CREATE INDEX managed_skills_job ON managed_skills(job_id);
+`;
+const metadataSchema = `
+CREATE TABLE metadata (
+  id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=2),
+  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)), daily_day TEXT NOT NULL,
+  daily_jobs INTEGER NOT NULL CHECK(daily_jobs>=0),
+  daily_model_calls INTEGER NOT NULL CHECK(daily_model_calls>=0), legacy_sha256 TEXT
+) STRICT;
+`;
+const schema = `
+${metadataSchema}
 CREATE TABLE episodes (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, model_profile TEXT NOT NULL, episode_json TEXT NOT NULL
 ) STRICT;
@@ -49,7 +61,8 @@ CREATE INDEX jobs_finished ON jobs(finished_at DESC,seq DESC);
 CREATE INDEX skills_scope ON skills(state,host_version,policy_revision,model_profile,app_digest,expires_at);
 CREATE INDEX skills_slot ON skills(state,scope_json,trigger_json);
 CREATE INDEX skills_job ON skills(job_id,state);
-PRAGMA user_version=1;
+${managementSchema}
+PRAGMA user_version=2;
 `;
 
 /** SQLite WAL reset fixes: older supported Node runtimes use rollback journals.
@@ -90,7 +103,7 @@ async function publishOwner(directory: string, replace = false): Promise<void> {
   } finally { await unlink(temporary).catch(error => { if (!hasCode(error, "ENOENT")) throw error; }); }
 }
 function importState(db: DatabaseSync, state: StoreState, sourceHash: string | null): void {
-  db.prepare("INSERT INTO metadata VALUES(1,1,?,?,?,?,?)").run(Number(state.enabled), state.daily.day, state.daily.jobs, state.daily.modelCalls, sourceHash);
+  db.prepare("INSERT INTO metadata VALUES(1,2,?,?,?,?,?)").run(Number(state.enabled), state.daily.day, state.daily.jobs, state.daily.modelCalls, sourceHash);
   const episode = db.prepare("INSERT INTO episodes(id,model_profile,episode_json) VALUES(?,?,?)");
   for (const value of state.episodes) episode.run(value.id, value.scope.modelProfile, JSON.stringify(value));
   const job = db.prepare("INSERT INTO jobs(id,episode_id,fingerprint,state,created_at,started_at,finished_at,owner_pid,candidate_hashes_json,feedback_json,model_calls,last_failure_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
@@ -179,7 +192,22 @@ export class SkillDatabase {
   private async initialize(db: DatabaseSync, owner: string): Promise<void> {
     const version = () => db.prepare("PRAGMA user_version").get()?.user_version;
     if (version() === 1) {
-      if (db.prepare("SELECT schema_version FROM metadata WHERE id=1").get()?.schema_version !== 1) invalid();
+      await this.begin(db, "BEGIN IMMEDIATE");
+      try {
+        if (version() === 1) {
+          if (db.prepare("SELECT schema_version FROM metadata WHERE id=1").get()?.schema_version !== 1) invalid();
+          // Only metadata's legacy daily CHECK constraints change. All evidence,
+          // candidate hashes and validation records remain untouched.
+          db.exec(`ALTER TABLE metadata RENAME TO legacy_metadata;
+            ${metadataSchema}
+            INSERT INTO metadata SELECT id,2,enabled,daily_day,daily_jobs,daily_model_calls,legacy_sha256 FROM legacy_metadata;
+            DROP TABLE legacy_metadata; ${managementSchema} PRAGMA user_version=2;`);
+        }
+        await this.begin(db, "COMMIT");
+      } catch (error) { try { db.exec("ROLLBACK"); } catch { /* preserve migration error */ } throw error; }
+    }
+    if (version() === 2) {
+      if (db.prepare("SELECT schema_version FROM metadata WHERE id=1").get()?.schema_version !== 2) invalid();
       if (owner === LEGACY_OWNER) await this.seal(db);
       return;
     }
@@ -187,7 +215,7 @@ export class SkillDatabase {
     await this.begin(db, "BEGIN IMMEDIATE");
     let release: (() => Promise<void>) | undefined;
     try {
-      if (version() === 1) { await this.begin(db, "COMMIT"); await this.seal(db); return; }
+      if (version() === 2) { await this.begin(db, "COMMIT"); await this.seal(db); return; }
       if (version() !== 0 || db.prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all().length) invalid();
       release = await this.retryBusy(() => acquireLegacyLock(this.directory), true);
       const legacyPath = join(this.directory, "state.json");

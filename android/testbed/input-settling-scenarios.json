@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.tappilot.testbed",
+  "activity": "dev.tappilot.testbed/.MainActivity",
+  "oraclePath": "files/oracle.json",
+  "readinessBudgetMs": 2500,
+  "waitMs": 350,
+  "thinkingMs": 3000,
+  "transitionClock": "native_text_watcher",
+  "scenarios": [
+    { "id": "input_enabled_500", "kind": "enabled", "expected": "ready", "sideEffectDelayMs": 500 },
+    { "id": "input_geometry_800", "kind": "geometry", "expected": "ready", "sideEffectDelayMs": 800 },
+    { "id": "input_refresh_forever", "kind": "permanent_change", "expected": "settling", "sideEffectDelayMs": 0 }
+  ]
+}

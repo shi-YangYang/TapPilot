@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.tappilot.testbed",
+  "activity": "dev.tappilot.testbed/.MainActivity",
+  "oraclePath": "files/oracle.json",
+  "waitMs": 350,
+  "refreshDelayMs": 1400,
+  "minimumRefreshes": 3,
+  "scenarios": [
+    { "id": "label_refresh_allowed", "expected": "success", "declareStatus": true, "recipientChanged": false },
+    { "id": "label_refresh_undeclared", "expected": "refusal", "declareStatus": false, "recipientChanged": false, "errorCode": "TARGET_CHANGED", "reason": "PAGE_CONTEXT_CHANGED" },
+    { "id": "label_refresh_recipient", "expected": "refusal", "declareStatus": true, "recipientChanged": true, "errorCode": "TARGET_CHANGED", "reason": "PAGE_CONTEXT_CHANGED" }
+  ]
+}

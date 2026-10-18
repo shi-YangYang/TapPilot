@@ -19,6 +19,52 @@ test('configuration discards output limits supplied by older clients', () => {
     assert.equal('maxOutputTokens' in validateConfig({ ...valid, maxOutputTokens }), false);
   }
 });
+test('image support is explicit, defaults to text-only, and rejects non-booleans', () => {
+  assert.equal(validateConfig(valid).vision, false);
+  assert.equal(validateConfig({ ...valid, model: 'vision-capable-model' }).vision, false);
+  for (const vision of [true, false]) assert.equal(validateConfig({ ...valid, vision }).vision, vision);
+  for (const vision of [null, 0, 1, 'true', 'false', [], {}]) {
+    assert.throws(() => validateConfig({ ...valid, vision }), error => error.code === 'INVALID_INPUT');
+  }
+});
+test('legacy settings stay text-only and image support persists without exposing or changing the key', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'tappilot-vision-config-'));
+  const cipher = { encrypt: async value => Buffer.from([...value].reverse().join('')), decrypt: async value => [...value.toString()].reverse().join('') };
+  try {
+    const store = new SettingsStore(directory, cipher);
+    assert.equal((await store.load()).vision, false);
+    await store.save(valid);
+    const legacy = JSON.parse(await readFile(store.file, 'utf8'));
+    delete legacy.vision;
+    await writeFile(store.file, JSON.stringify(legacy));
+    const restored = new SettingsStore(directory, cipher);
+    const loaded = await restored.load();
+    assert.equal(loaded.vision, false);
+    assert.equal(restored.model().vision, false);
+    assert.equal(restored.model().apiKey, valid.apiKey);
+    const result = await restored.save({ ...valid, apiKey: '', vision: true });
+    assert.equal(result.vision, true);
+    assert.equal(result.hasKey, true);
+    assert.equal('apiKey' in result, false);
+    const saved = JSON.parse(await readFile(store.file, 'utf8'));
+    assert.equal(saved.vision, true);
+    assert.equal(saved.encryptedKey, legacy.encryptedKey);
+    assert.equal(saved.version, legacy.version);
+    const enabled = new SettingsStore(directory, cipher);
+    assert.equal((await enabled.load()).vision, true);
+    assert.equal(enabled.model().vision, true);
+    assert.equal(enabled.model().apiKey, valid.apiKey);
+    await enabled.save({ ...valid, apiKey: '', vision: false });
+    const disabled = new SettingsStore(directory, cipher);
+    assert.equal((await disabled.load()).vision, false);
+    assert.equal(disabled.model().vision, false);
+    assert.equal(disabled.model().apiKey, valid.apiKey);
+    await writeFile(store.file, JSON.stringify({ ...saved, vision: 'true' }));
+    const invalid = new SettingsStore(directory, cipher);
+    await assert.rejects(invalid.load());
+    assert.equal(invalid.public().vision, false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 test('legacy v1 output limits are ignored and removed on save without losing the key or device settings', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'tappilot-output-budget-'));
   const cipher = { encrypt: async value => Buffer.from([...value].reverse().join('')), decrypt: async value => [...value.toString()].reverse().join('') };

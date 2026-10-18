@@ -86,10 +86,11 @@ test("task cancellation during transport preparation gates dispatch; emergency s
 });
 
 test("compaction preserves identity, ordering, disabled and hidden states, labels and hierarchy", () => {
-  const source = { ...snapshot, nodes: [{ ...snapshot.nodes[0]!, enabled: false, visible: false, text: "", parentId: "root", resourceId: "" }] };
+  const source = { ...snapshot, nodes: [{ ...snapshot.nodes[0]!, enabled: false, visible: false, showingHintText: false, text: "", parentId: "root", resourceId: "" }] };
   const compact = compactUi(source) as typeof source;
   assert.equal(compact.nodes[0]!.enabled, false);
   assert.equal(compact.nodes[0]!.visible, false);
+  assert.equal(compact.nodes[0]!.showingHintText, false);
   assert.equal(compact.nodes[0]!.nodeId, "n0");
   assert.equal(compact.nodes[0]!.parentId, "root");
   assert.deepEqual(compact.nodes[0]!.bounds, source.nodes[0]!.bounds);

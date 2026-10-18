@@ -5,6 +5,25 @@
   "oraclePath": "files/oracle.json",
   "scenarios": [
     {
+      "id": "native_scroll_background",
+      "expected": "success",
+      "change": "none",
+      "action": "tap_element"
+    },
+    {
+      "id": "native_scroll_background_click",
+      "expected": "success",
+      "change": "none",
+      "action": "click_element"
+    },
+    {
+      "id": "native_scroll_foreground",
+      "expected": "refusal",
+      "change": "none",
+      "action": "tap_element",
+      "reasons": ["AMBIGUOUS_TOUCH_TARGET"]
+    },
+    {
       "id": "native_refresh",
       "expected": "success",
       "change": "continuous",
@@ -18,12 +37,9 @@
     },
     {
       "id": "native_reorder",
-      "expected": "refusal",
+      "expected": "success",
       "change": "armed",
-      "action": "tap_element",
-      "reasons": [
-        "PAGE_CONTEXT_CHANGED"
-      ]
+      "action": "tap_element"
     },
     {
       "id": "native_replaced",

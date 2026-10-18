@@ -136,8 +136,11 @@ test("model projection exposes only bounded fixed verification metadata, never a
   assert.deepEqual(projectToolResult({ action: { accepted: true, contextVerification: "explicit_label_changes", allowedLabelChangesCount: 2,
     allowedLabelChanges: ["Synthetic private label"] } }),
   { action: { accepted: true, contextVerification: "explicit_label_changes", allowedLabelChangesCount: 2 } });
+  assert.deepEqual(projectToolResult({ action: { accepted: true, contextVerification: "native_tab_navigation",
+    allowedLabelChangesCount: 0, automaticLabelChangesCount: 1, nativeCollection: { private: true } } }),
+  { action: { accepted: true, contextVerification: "native_tab_navigation", allowedLabelChangesCount: 0, automaticLabelChangesCount: 1 } });
   for (const count of [-1, 9, 1.5, "2", NaN]) {
-    assert.deepEqual(projectToolResult({ contextVerification: "Synthetic arbitrary claim", allowedLabelChangesCount: count }), {});
+    assert.deepEqual(projectToolResult({ contextVerification: "Synthetic arbitrary claim", allowedLabelChangesCount: count, automaticLabelChangesCount: count }), {});
   }
 });
 

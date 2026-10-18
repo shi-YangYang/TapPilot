@@ -64,6 +64,18 @@ test("projection preserves full distinct text, sensitive flags and state without
   assert.deepEqual(projected.nodes[2].bounds, source.nodes[3].bounds);
 });
 
+test("editor hint evidence retains true and false without inventing missing proof", () => {
+  const projected = projectToolResult(observation([
+    node("root", null),
+    node("hint", "root", { editable: true, text: "Sample query", showingHintText: true }),
+    node("value", "root", { editable: true, text: "Sample query", showingHintText: false }),
+    node("old", "root", { editable: true, text: "Sample query" }),
+  ])) as Json;
+  assert.equal(projected.nodes[0].showingHintText, true);
+  assert.equal(projected.nodes[1].showingHintText, false);
+  assert.equal(projected.nodes[2].showingHintText, undefined);
+});
+
 test("partial find results keep every match and missing parents are not presented as observed targets", () => {
   const projected = projectToolResult({ snapshotId: "synthetic:2", packageName: "synthetic.fixture", elements: [node("n9", "unreturned", { resourceId: "synthetic.fixture:id/wrapper" })], truncated: true, changed: true, timedOut: false, matched: true }) as Json;
   assert.equal(projected.elements.length, 1);
@@ -135,6 +147,46 @@ test("error projection retains only known action rejection reasons and drops arb
     assert.deepEqual(projectToolResult({ ok: false, error: { ...stale, details: { reason, label: "Synthetic private text" } } }),
       { ok: false, error: { ...stale, details: { reason } } });
   }
+});
+
+test("target observation projects fixed status and actionable IDs without selectors or free-form diagnostics", () => {
+  for (const status of ["native", "missing", "unavailable", "ambiguous", "blocked"]) {
+    const target = { status, operation: "tap", nodeIds: status === "native" ? ["n1"] : [], reason: status === "native" ? "native_target" : "not_found" };
+    const source = { ok: true, result: { observation: observation([node("n1", null, { text: "Search", clickable: true })]),
+      target: { ...target, selector: { text: "synthetic-private" }, explanation: "synthetic-private", image: { data: "synthetic-private" } } } };
+    const projected = projectToolResult(source) as Json;
+    assert.deepEqual(projected.result.target, target);
+    assert.equal(projected.result.observation.nodes[0].nodeId, "n1");
+    assert.equal(JSON.stringify(projected).includes("synthetic-private"), false);
+  }
+  for (const patch of [{ status: "synthetic-private" }, { operation: "delete" }, { reason: "synthetic-private" },
+    { nodeIds: ["n1", "n2"] }, { nodeIds: ["x".repeat(65)] }, { nodeIds: [] }]) {
+    const projected = projectToolResult({ target: { status: "native", operation: "tap", nodeIds: ["n1"], reason: "native_target", ...patch } }) as Json;
+    assert.equal(projected.target, undefined);
+  }
+});
+
+test("screenshot projection keeps validated action capabilities for direct and mixed results, never image bytes", () => {
+  const metadata = { kind: "screenshot", captureId: "synthetic-capture", packageName: "synthetic.fixture", windowId: 3,
+    width: 100, height: 100, mimeType: "image/jpeg", source: "window", observationOnly: false,
+    actionContract: "visual-tap-v1", expiresInMs: 60000, supportedActions: ["tap_visual", "swipe_visual"] };
+  const source = { ...metadata, data: "synthetic-private", image: { mimeType: "image/jpeg", data: "synthetic-private" }, selector: { text: "synthetic-private" } };
+  assert.deepEqual(projectToolResult(source), metadata);
+  const mixed = projectToolResult({ ok: true, result: { observation: observation([node("n1", null, { text: "Native detail" })]),
+    target: { status: "missing", operation: "scroll", nodeIds: [], reason: "not_found" }, visualObservation: source } }) as Json;
+  assert.deepEqual(mixed.result.visualObservation, metadata);
+  assert.equal(mixed.result.observation.nodes[0].text, "Native detail");
+  assert.equal(mixed.result.target.operation, "scroll");
+  assert.equal(JSON.stringify(mixed).includes("synthetic-private"), false);
+  const { supportedActions: _actions, ...tapOnly } = metadata;
+  assert.deepEqual(projectToolResult({ ...tapOnly, image: source.image }), tapOnly, "original action contract must not lose tap authority");
+  const { actionContract: _contract, expiresInMs: _expiry, ...legacy } = tapOnly;
+  assert.deepEqual(projectToolResult({ ...legacy, observationOnly: true, image: source.image }), { ...legacy, observationOnly: true });
+  for (const supportedActions of [["tap_visual", "tap_visual"], ["arbitrary-action"], []]) {
+    assert.deepEqual(projectToolResult({ ...source, supportedActions }), { kind: "screenshot" });
+  }
+  assert.deepEqual(projectToolResult({ visualObservationError: { code: "SCREENSHOT_PROTECTED", message: "Synthetic error", retryable: false, image: source.image } }),
+    { visualObservationError: { code: "SCREENSHOT_PROTECTED", message: "Synthetic error", retryable: false } });
 });
 
 test("synthetic large tree has substantially smaller model payload with every meaningful label retained", t => {

@@ -20,9 +20,11 @@ function string(value, maximum, label, optional = false) {
 
 export function validateConfig(value) {
   // Accept the retired field from older clients, but never retain or forward it.
-  object(value, ['baseUrl', 'apiKey', 'model', 'maxOutputTokens', 'clearKey', 'adbPath', 'serial', 'mode']);
+  object(value, ['baseUrl', 'apiKey', 'model', 'vision', 'maxOutputTokens', 'clearKey', 'adbPath', 'serial', 'mode']);
   const baseUrl = string(value.baseUrl, 2048, 'API 地址');
   const model = string(value.model, 200, '模型名称');
+  if (value.vision !== undefined && typeof value.vision !== 'boolean') throw new ClientError('INVALID_INPUT', '图片支持选项格式不正确。');
+  const vision = value.vision === true;
   const apiKey = string(value.apiKey, 8192, 'API Key', true);
   const adbPath = string(value.adbPath, 4096, 'ADB 路径', true);
   const serial = string(value.serial, 200, '设备编号', true);
@@ -38,10 +40,10 @@ export function validateConfig(value) {
   if (!model) throw new ClientError('INVALID_MODEL', '请填写模型名称。');
   if (adbPath && !path.isAbsolute(adbPath)) throw new ClientError('INVALID_ADB_PATH', 'ADB 路径必须是绝对路径。');
   if (serial && !/^[a-zA-Z0-9._:-]+$/.test(serial)) throw new ClientError('INVALID_SERIAL', '设备编号格式不正确。');
-  return { baseUrl, model, apiKey, adbPath, serial, mode, clearKey: value.clearKey === true };
+  return { baseUrl, model, vision, apiKey, adbPath, serial, mode, clearKey: value.clearKey === true };
 }
 
-export const defaults = { baseUrl: '', model: '', apiKey: '', adbPath: '', serial: '', mode: 'wireless' };
+export const defaults = { baseUrl: '', model: '', vision: false, apiKey: '', adbPath: '', serial: '', mode: 'wireless' };
 
 export class SettingsStore {
   constructor(directory, cipher) { this.directory = directory; this.file = path.join(directory, 'settings.json'); this.cipher = cipher; this.current = { ...defaults }; }
@@ -50,9 +52,9 @@ export class SettingsStore {
     try { stored = JSON.parse(await readFile(this.file, 'utf8')); }
     catch (error) { if (error.code === 'ENOENT') return this.public(); throw new ClientError('SETTINGS_UNREADABLE', '无法读取本机配置，请在设置中重新保存。'); }
     try {
-      object(stored, ['version', 'baseUrl', 'model', 'maxOutputTokens', 'adbPath', 'serial', 'encryptedKey', 'mode']);
+      object(stored, ['version', 'baseUrl', 'model', 'vision', 'maxOutputTokens', 'adbPath', 'serial', 'encryptedKey', 'mode']);
       if (stored.version !== 1) throw new Error('version');
-      this.current = { ...validateConfig({ baseUrl: stored.baseUrl, model: stored.model, adbPath: stored.adbPath, serial: stored.serial, mode: stored.mode }), apiKey: '' };
+      this.current = { ...validateConfig({ baseUrl: stored.baseUrl, model: stored.model, vision: stored.vision, adbPath: stored.adbPath, serial: stored.serial, mode: stored.mode }), apiKey: '' };
       if (stored.encryptedKey) this.current.apiKey = await this.cipher.decrypt(Buffer.from(stored.encryptedKey, 'base64'));
       return this.public();
     } catch { this.current = { ...defaults }; throw new ClientError('KEYCHAIN_UNAVAILABLE', '无法解密保存的配置。请重新输入模型配置和 API Key。'); }
@@ -65,7 +67,7 @@ export class SettingsStore {
     next.apiKey = next.clearKey ? '' : next.apiKey || (sameOrigin ? this.current.apiKey : '');
     // Keychain failure must never fall back to plaintext storage.
     const encryptedKey = next.apiKey ? (await this.cipher.encrypt(next.apiKey)).toString('base64') : '';
-    const stored = { version: 1, baseUrl: next.baseUrl, model: next.model, adbPath: next.adbPath, serial: next.serial, mode: next.mode, encryptedKey };
+    const stored = { version: 1, baseUrl: next.baseUrl, model: next.model, vision: next.vision, adbPath: next.adbPath, serial: next.serial, mode: next.mode, encryptedKey };
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const temporary = `${this.file}.tmp`;
     await writeFile(temporary, JSON.stringify(stored), { mode: 0o600 });
@@ -73,7 +75,7 @@ export class SettingsStore {
     this.current = next;
     return this.public();
   }
-  model() { const { baseUrl, model, apiKey } = this.current; validateConfig({ baseUrl, model, apiKey }); return { baseUrl, model, apiKey }; }
+  model() { const { baseUrl, model, vision, apiKey } = this.current; validateConfig({ baseUrl, model, vision, apiKey }); return { baseUrl, model, vision, apiKey }; }
 }
 
 export function taskInput(value) {

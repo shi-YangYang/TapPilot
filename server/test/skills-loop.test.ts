@@ -57,11 +57,11 @@ test("job budgets are durable and repeated evidence cannot bypass them",async()=
   await assert.rejects(store.reserveModelCall(queued.id),/SKILLS_BUDGET_EXHAUSTED/);
   await store.finishJob(queued.id,"exhausted");assert.equal((await store.recordEpisode(episode())).queued,false);
   const second=await store.recordEpisode(episode(2));assert.ok(await store.beginJob(scope.modelProfile));await store.finishJob(second.id,"rejected");
-  await store.recordEpisode(episode(3));assert.equal(await store.beginJob(scope.modelProfile),undefined);
-  assert.equal((await store.status()).dailyJobs,2);assert.equal((await store.status()).dailyModelCalls,100);
+  await store.recordEpisode(episode(3));assert.ok(await store.beginJob(scope.modelProfile));
+  assert.equal((await store.status()).dailyJobs,3);assert.equal((await store.status()).dailyModelCalls,100);
 }));
 
-test("native jobs allow exactly 150 calls while concurrent reservations preserve the daily 200 cap",async()=>withStore(async(store,root)=>{
+test("native jobs retain a 150-call per-job cap without a daily model-call cap",async()=>withStore(async(store,root)=>{
   const now=Date.now(),first=await store.recordEpisode(episode(),now);assert.ok(await store.beginJob(scope.modelProfile,now));
   for(const invalid of [0,101,151,200,Infinity,NaN,"150"]){
     await assert.rejects(store.reserveModelCall(first.id,now,invalid as 150),/SKILLS_INVALID_BUDGET/);
@@ -73,11 +73,11 @@ test("native jobs allow exactly 150 calls while concurrent reservations preserve
   const second=await store.recordEpisode(episode(2),now);assert.ok(await store.beginJob(scope.modelProfile,now));
   const reloaded=new SkillStore(root);
   const calls=await Promise.allSettled(Array.from({length:55},(_,index)=>(index%2?store:reloaded).reserveModelCall(second.id,now,150)));
-  assert.equal(calls.filter(call=>call.status==="fulfilled").length,50);
-  const rejected=calls.filter(call=>call.status==="rejected");assert.equal(rejected.length,5);
+  assert.equal(calls.filter(call=>call.status==="fulfilled").length,55);
+  const rejected=calls.filter(call=>call.status==="rejected");assert.equal(rejected.length,0);
   assert.ok(rejected.every(call=>call.status==="rejected"&&call.reason.message==="SKILLS_BUDGET_EXHAUSTED"));
-  assert.equal((await reloaded.status(now)).dailyModelCalls,200);
-  assert.deepEqual((await reloaded.history()).jobs.map(job=>job.modelCalls),[150,50]);
+  assert.equal((await reloaded.status(now)).dailyModelCalls,205);
+  assert.deepEqual((await reloaded.history()).jobs.map(job=>job.modelCalls),[150,55]);
 }));
 
 test("the loop selects only the fixed native or default model-call budget",async()=>{
@@ -264,4 +264,34 @@ test("a schedule request during a running pump is not lost during final cleanup"
   let requested=false;let loop:ContinuousImprover;
   loop=new ContinuousImprover({store,resolveModel:()=>undefined,onStatus:state=>{if(state.phase==="idle"&&!requested){requested=true;loop.schedule();}}});
   loop.schedule();await loop.waitForIdle();assert.equal(requested,true);assert.equal((await loop.status()).phase,"idle");
+}));
+
+test("a managed draft uses real failure evaluation without generation and only trusted success activates it", async () => withStore(async store => {
+  const actual = await recordedBoundsEpisode();
+  const failed = await store.recordEpisode(actual); await store.beginJob(scope.modelProfile); await store.finishJob(failed.id, "rejected");
+  const manual: SkillSpec = { ...spec(), scope: actual.scope, trigger: actual.trigger, program: { entry: 0, nodes: [
+    { kind: "step", operation: { op: "discard_stale_target" }, next: 1 },
+    { kind: "step", operation: { op: "observe", mode: "reuse_latest" }, next: 2 },
+    { kind: "step", operation: { op: "resolve_target", capability: "clickable", maxAncestorHops: 1 }, next: 3 },
+    { kind: "end", outcome: "continue" },
+  ] } };
+  const title = "LOCAL_DISPLAY_TITLE_MUST_NOT_REACH_MODEL";
+  const draft = await store.createManagedSkill({ title, spec: manual });
+  assert.equal(draft.state, "draft"); assert.equal((await store.loadSnapshot(actual.scope)).length, 0);
+  let proposals = 0; const fetch = recoveryFetch(() => proposals++);
+  const loop = new ContinuousImprover({ store, resolveModel: () => model, modelFetch: async (url, init) => {
+    assert.equal(String(init.body).includes(title), false); return fetch(url, init);
+  } });
+  loop.schedule(); await loop.waitForIdle();
+  assert.equal(proposals, 0, "the manual program replaces generation but cannot bypass paired evaluation");
+  const adopted = (await store.listManagedSkills()).find(value => value.id === draft.id)!;
+  assert.equal(adopted.state, "active", JSON.stringify(await loop.status())); assert.ok(adopted.validation);
+  assert.equal(adopted.source, "manual"); assert.equal((await store.loadSnapshot(actual.scope)).length, 1);
+  const renamed = await store.updateManagedSkill(draft.id, { title: "已验证恢复", spec: adopted.spec });
+  assert.equal(renamed.state, "active"); assert.deepEqual(renamed.validation, adopted.validation);
+  const edited = await store.updateManagedSkill(draft.id, { title: "重新验证", spec: { ...adopted.spec, program: { entry: 0, nodes: [
+    { kind: "step", operation: { op: "inspect", aspect: "context" }, next: 1 }, { kind: "end", outcome: "stop" },
+  ] } } });
+  assert.equal(edited.state, "draft"); assert.equal(edited.validation, undefined);
+  assert.equal((await store.loadSnapshot(actual.scope)).length, 0, "editing removes the previously adopted executable identity");
 }));

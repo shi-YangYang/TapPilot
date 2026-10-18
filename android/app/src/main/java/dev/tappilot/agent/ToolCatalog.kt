@@ -17,6 +17,8 @@ internal object ToolCatalog {
         "contentDescription" to text(), "className" to text(), "clickable" to JSONObject().put("type", "boolean"),
         "scrollable" to JSONObject().put("type", "boolean"), "editable" to JSONObject().put("type", "boolean"), "enabled" to JSONObject().put("type", "boolean"))).put("minProperties", 1)
     val actions = linkedMapOf(
+        "tap_visual" to obj(mapOf("captureId" to text(128), "x" to number(0, 16384), "y" to number(0, 16384), "targetDescription" to text(256)), listOf("captureId", "x", "y", "targetDescription")),
+        "swipe_visual" to obj(mapOf("captureId" to text(128), "startX" to number(0, 16384), "startY" to number(0, 16384), "endX" to number(0, 16384), "endY" to number(0, 16384), "durationMs" to number(200, 1000), "targetDescription" to text(256)), listOf("captureId", "startX", "startY", "endX", "endY", "targetDescription")),
         "tap_element" to obj(declaredLabels, node.keys.toList()),
         "click_element" to obj(declaredLabels, node.keys.toList()),
         "input_text" to obj(declaredLabels + ("text" to text(4096, 0)), listOf("snapshotId", "nodeId", "text")),
@@ -29,9 +31,10 @@ internal object ToolCatalog {
     private val schemas = linkedMapOf(
         "get_ui_tree" to obj(mapOf("maxNodes" to number(1, 500), "maxDepth" to number(1, 40))),
         "get_current_app" to obj(emptyMap()),
+        "take_screenshot" to obj(emptyMap()),
         "find_element" to obj(mapOf("selector" to selector, "maxResults" to number(1, 100)), listOf("selector")),
-        "wait_for_ui_change" to obj(mapOf("sinceRevision" to number(0, Int.MAX_VALUE), "timeoutMs" to number(1, 5000), "selector" to selector), listOf("sinceRevision")),
-        "act_and_observe" to obj(mapOf("action" to enum(*actions.keys.toTypedArray()), "arguments" to anyArgs, "waitMs" to number(0, 1500)), listOf("action", "arguments"))
+        "wait_for_ui_change" to obj(mapOf("sinceRevision" to number(0, Int.MAX_VALUE), "snapshotId" to text(128), "timeoutMs" to number(1, 5000), "selector" to selector, "requireUsable" to JSONObject().put("type", "boolean")), listOf("sinceRevision")),
+        "act_and_observe" to obj(mapOf("action" to enum(*actions.keys.toTypedArray()), "arguments" to anyArgs, "waitMs" to number(0, 1500), "waitFor" to selector), listOf("action", "arguments"))
     )
     fun validate(name: String, args: JSONObject) {
         val schema = schemas[name] ?: throw AgentError("UNKNOWN_TOOL", "请求了未开放的工具")
@@ -42,7 +45,7 @@ internal object ToolCatalog {
         when {
             name in actions -> validateAction(name, args)
             name == "get_device_info" || name == "emergency_stop" -> validateValue(args, obj(emptyMap()), "arguments")
-            name == "wait_for_ui_change" -> validateValue(args, obj(mapOf("sinceRevision" to number(0, Int.MAX_VALUE), "timeoutMs" to number(1, 25000), "selector" to selector), listOf("sinceRevision")), "arguments")
+            name == "wait_for_ui_change" -> validateValue(args, obj(mapOf("sinceRevision" to number(0, Int.MAX_VALUE), "snapshotId" to text(128), "timeoutMs" to number(1, 25000), "selector" to selector, "requireUsable" to JSONObject().put("type", "boolean")), listOf("sinceRevision")), "arguments")
             else -> validate(name, args)
         }
     }

@@ -106,7 +106,7 @@ function topology(input: unknown): unknown {
   const source = nodes(input), indexes = new Map(source.map((node, index) => [node.nodeId, index]));
   return source.map(node => [indexes.get(node.parentId) ?? -1, node.clickable === true, node.editable === true, node.scrollable === true, node.focused === true, flag(node.enabled), flag(node.visible)]);
 }
-export function compactTrace(input: { index: number; before?: unknown; after?: unknown; actionKind?: unknown; targetNodeId?: unknown; diagnostic: Pick<DiagnosticEvent, "actionKind" | "errorCode" | "reason" | "dispatchState" | "acceptanceState" | "effectState" | "contextChange" | "contextConflictCount"> & { executor?: "node-v1" } }): TraceStep {
+export function compactTrace(input: { index: number; before?: unknown; after?: unknown; actionKind?: unknown; targetNodeId?: unknown; diagnostic: Pick<DiagnosticEvent, "actionKind" | "errorCode" | "reason" | "dispatchState" | "acceptanceState" | "effectState" | "contextChange" | "contextConflictCount" | "executor"> }): TraceStep {
   const before = compactObservation(input.before), after = compactObservation(input.after);
   const beforeSession = session(input.before), afterSession = session(input.after);
   const contextFlags = [beforeSession && afterSession ? flag(beforeSession !== afterSession) : "unknown", ...["packageName", "windowId"].map(key => compareField(input.before, input.after, key))];

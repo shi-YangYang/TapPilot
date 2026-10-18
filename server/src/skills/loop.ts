@@ -70,7 +70,6 @@ export class ContinuousImprover {
     await this.announce("queued");
     while(!this.paused){
       const state=await this.options.store.status(this.now());if(!state.enabled||!state.queued){if(this.phase==="queued")await this.announce("idle");return;}
-      if(state.dailyJobs>=2||state.dailyModelCalls>=200){await this.announce("budget_exhausted","budget_exhausted");return;}
       let model:ModelConfig|undefined;try{model=await this.options.resolveModel();}catch{/* no secret-bearing error text */}
       if(this.paused)return;
       if(!model){await this.announce("paused","model_unavailable");return;}
@@ -79,7 +78,7 @@ export class ContinuousImprover {
       const claimed=await this.options.store.beginJob(profile,this.now());if(!claimed){await this.announce("idle");return;}
       if(this.paused){await this.options.store.finishJob(claimed.job.id,"interrupted",this.now());return;}
       // Native evaluation has 22 bounded Android runs per candidate, plus generation.
-      // Its fixed job allowance covers a revision; the atomic daily cap stays 200.
+      // Its fixed job allowance covers a revision; daily counters are statistics only.
       this.controller=new AbortController();const signal=AbortSignal.any([this.controller.signal,AbortSignal.timeout(this.options.android?15*60_000:5*60_000)]);
       const modelCallBudget=this.options.android?150:100;
       const {job,episode}=claimed;let parent=claimed.parent,feedback:SkillFeedback[]=[];let budgetExhausted=false;
@@ -95,8 +94,9 @@ export class ContinuousImprover {
       try{
         for(let candidateIndex=0;candidateIndex<2;candidateIndex++){
           signal.throwIfAborted();stage="generation";await this.announce("generating");
-          const spec:SkillSpec=await generateSkill(episode,{model:frozenModel,modelFetch:budgetFetch,signal,now:this.now(),parent,feedback,evaluationFeedback,onInvalidProposal:this.options.onInvalidProposal});
-          signal.throwIfAborted();const hash=await this.options.store.addCandidate(job.id,spec,this.now());
+          const managed=candidateIndex===0?claimed.candidate:undefined;
+          const spec:SkillSpec=managed?.spec??await generateSkill(episode,{model:frozenModel,modelFetch:budgetFetch,signal,now:this.now(),parent,feedback,evaluationFeedback,onInvalidProposal:this.options.onInvalidProposal});
+          signal.throwIfAborted();const hash=managed?.hash??await this.options.store.addCandidate(job.id,spec,this.now());
           stage="evaluation";await this.announce("evaluating");
           try{
             const evaluation=await evaluateSkill(spec,episode,{model:frozenModel,modelFetch:budgetFetch,signal,

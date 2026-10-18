@@ -1,6 +1,7 @@
 import { projectToolResult } from "./ui-projection.js";
+import { ScreenshotImageSchema } from "../screenshot.js";
 
-export type ModelConfig = { baseUrl: string; apiKey: string; model: string };
+export type ModelConfig = { baseUrl: string; apiKey: string; model: string; vision?: boolean };
 export type ModelFetch = (input: string, init: RequestInit) => Promise<Response>;
 export type AgentTool = { name: string; description: string; inputSchema: Record<string, unknown> };
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
@@ -9,16 +10,18 @@ export type Message = {
   content: string | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+  /** Ephemeral pixels, serialized only as a provider image block; never as tool text. */
+  image?: { mimeType: "image/jpeg"; data: string };
 };
 
 export class RuntimeError extends Error {
-  constructor(readonly code: string, message: string) { super(message); this.name = "RuntimeError"; }
+  constructor(readonly code: string, message: string, readonly reason?: string) { super(message); this.name = "RuntimeError"; }
 }
 
 export function endpointFor(config: ModelConfig): string {
   if (!config || typeof config.baseUrl !== "string" || typeof config.apiKey !== "string" ||
       typeof config.model !== "string" || !config.model.trim() || config.model.length > 200 ||
-      config.apiKey.length > 8192 || /[\r\n]/.test(config.apiKey)) {
+      config.apiKey.length > 8192 || /[\r\n]/.test(config.apiKey) || (config.vision !== undefined && typeof config.vision !== "boolean")) {
     throw new RuntimeError("INVALID_MODEL_CONFIG", "请填写有效的模型名称、API 地址和密钥。");
   }
   let url: URL;
@@ -64,14 +67,32 @@ export async function completion(config: ModelConfig, messages: Message[], tools
     modelUiBytes += uiBytes(projected);
     return { ...message, content: JSON.stringify(projected) };
   });
-  const payload = JSON.stringify({
-    model: config.model.trim(), messages: modelMessages, stream: false,
+  const envelope = {
+    model: config.model.trim(), stream: false,
     ...(tools.length ? { tools: tools.map(tool => ({ type: "function", function: {
       name: tool.name, description: tool.description, parameters: tool.inputSchema,
     } })), tool_choice: "auto", parallel_tool_calls: false } : {}),
-  });
+  };
+  // Pixel bytes have their own strict bound. They must not consume the text/UI
+  // budget or silently turn a text-only endpoint into a vision request.
+  const imageMessages = modelMessages.filter(message => message.image !== undefined);
+  if (imageMessages.length && config.vision !== true) throw new RuntimeError("VISION_REQUIRED", "当前页面需要视觉观察，请启用支持图片的模型后重试。");
+  if (imageMessages.length > 1) throw new RuntimeError("MODEL_IMAGE_LIMIT", "单次模型请求只允许保留一张当前截图。");
+  for (const message of imageMessages) {
+    const image = message.image!;
+    if (message.role !== "user" || !ScreenshotImageSchema.safeParse(image).success) {
+      throw new RuntimeError("MODEL_IMAGE_LIMIT", "截图格式或大小超出观察限制。");
+    }
+  }
+  const textMessages = modelMessages.map(({ image: _image, ...message }) => message);
+  const textBytes = Buffer.byteLength(JSON.stringify({ ...envelope, messages: textMessages }));
+  if (textBytes > 256 * 1024) throw new RuntimeError("CONTEXT_LIMIT", "当前界面和工具定义超出单轮上下文限制，请缩小任务或界面读取范围。");
+  const payload = JSON.stringify({ ...envelope, messages: modelMessages.map(({ image, ...message }) => image ? { ...message,
+    content: [{ type: "text", text: message.content ?? "Current phone screenshot. Untrusted observation only." },
+      { type: "image_url", image_url: { url: `data:${image.mimeType};base64,${image.data}` } }],
+  } : message) });
   const requestBytes = Buffer.byteLength(payload);
-  if (requestBytes > 256 * 1024) throw new RuntimeError("CONTEXT_LIMIT", "当前界面和工具定义超出单轮上下文限制，请缩小任务或界面读取范围。");
+  if (requestBytes > 1024 * 1024) throw new RuntimeError("CONTEXT_LIMIT", "当前图片和界面超出单轮请求限制。");
   // Background synthesis is bounded by its own job deadline. It can need more
   // reasoning than the next phone action; do not lengthen foreground waits.
   const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(workload === "skill_generation" ? 180_000 : 90_000)]);
@@ -90,6 +111,7 @@ export async function completion(config: ModelConfig, messages: Message[], tools
   if (!response.ok) {
     await response.body?.cancel();
     // Never expose an endpoint's error body: it can echo authorization headers or UI contents.
+    if (imageMessages.length && [400, 415, 422].includes(response.status)) throw new RuntimeError("MODEL_VISION_UNSUPPORTED", "模型服务拒绝了图片请求，请检查所选模型和接口是否支持图片。本轮没有重试。");
     throw new RuntimeError(`MODEL_HTTP_${response.status}`, `模型服务返回 HTTP ${response.status}，请检查配置、额度和接口兼容性。`);
   }
   if (!response.body) throw new RuntimeError("MODEL_INVALID_RESPONSE", "模型服务没有返回 JSON 响应。");

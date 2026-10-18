@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { createServer, type Server, type Socket } from "node:net";
 import { once } from "node:events";
 import test from "node:test";
-import { Bridge, requestJson, staleSnapshotReasons } from "../src/bridge.js";
+import { Bridge, requestJson, staleSnapshotReasons, phoneErrorSchema } from "../src/bridge.js";
+import { screenshotFailureReasons } from "../src/screenshot-errors.js";
 import { Adb } from "../src/adb.js";
 import { AgentError } from "../src/errors.js";
+import { visualError } from "./visual-refusal-fixture.js";
 
 async function fixture(handle: (socket: Socket, request: Record<string, unknown>) => void): Promise<{ port: number; close: () => Promise<void> }> {
   const sockets = new Set<Socket>();
@@ -56,6 +58,45 @@ test("NDJSON preserves fixed stale reasons and legacy errors without arbitrary d
     try { await assert.rejects(requestJson(f.port, "get_ui_tree", {}, 1000), { code: "BRIDGE_PROTOCOL_ERROR" }); }
     finally { await f.close(); }
   }
+});
+
+test("NDJSON preserves visual not-sent evidence and rejects mixed native observations", async () => {
+  for (const attachObservation of [false, true]) {
+    let calls = 0;
+    const f = await fixture((socket, req) => {
+      calls++;
+      socket.end(JSON.stringify({ id: req.id, ok: false, error: visualError(), meta: { durationMs: 1 },
+        ...(attachObservation ? { observation: { executor: "node-v1", nodes: [] } } : {}) }) + "\n");
+    });
+    try {
+      const request = requestJson(f.port, "act_and_observe", { action: "tap_visual" }, 1000);
+      if (attachObservation) await assert.rejects(request, { code: "BRIDGE_PROTOCOL_ERROR" });
+      else assert.deepEqual((await request).error, visualError());
+      assert.equal(calls, 1);
+    } finally { await f.close(); }
+  }
+});
+
+test("screenshot refusal details preserve only the exact code-reason pairs on the wire", async () => {
+  const pairs = [...screenshotFailureReasons.map(reason => ({ code: "SCREENSHOT_PROTECTED", reason })),
+    { code: "SCREENSHOT_UNAVAILABLE", reason: "SCREENSHOT_ACCESS_DENIED" }, { code: "SENSITIVE_FIELD", reason: "SENSITIVE_NODE" }];
+  for (const { code, reason } of pairs) {
+    const error = { code, message: "Synthetic refusal", retryable: false, details: { reason } };
+    const f = await fixture((socket, req) => socket.end(JSON.stringify({ id: req.id, ok: false, error, meta: { durationMs: 0 } }) + "\n"));
+    try { assert.deepEqual((await requestJson(f.port, "take_screenshot", {}, 1000)).error, error); }
+    finally { await f.close(); }
+  }
+  for (const [code, details] of [
+    ["SCREENSHOT_PROTECTED", { reason: "PRIVATE_SCREEN_TEXT" }],
+    ["SCREENSHOT_PROTECTED", { reason: "SYSTEM_SECURE_WINDOW", nativeMessage: "private" }],
+    ["SCREENSHOT_UNAVAILABLE", { reason: "SYSTEM_SECURE_WINDOW" }],
+    ["SENSITIVE_FIELD", { reason: "WINDOW_OBSCURED" }],
+    ["STALE_SNAPSHOT", { reason: "SYSTEM_SECURE_WINDOW" }],
+    ["SCREENSHOT_PROTECTED", { reason: "NODE_CONTENT_CHANGED" }],
+    ["SCREENSHOT_TIMEOUT", { reason: "SCREENSHOT_ACCESS_DENIED" }],
+    ["SCREENSHOT_PROTECTED", { executor: "node-v1", dispatchState: "not_sent", reason: "WINDOW_OBSCURED" }],
+  ]) assert.equal(phoneErrorSchema.safeParse({ code, message: "Synthetic refusal", retryable: false, details }).success, false);
+  assert.equal(phoneErrorSchema.safeParse({ code: "SCREENSHOT_PROTECTED", message: "Legacy refusal", retryable: false }).success, true);
 });
 
 test("NDJSON rejects wrong IDs, invalid schemas and oversized responses", async (t) => {

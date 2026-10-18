@@ -33,6 +33,9 @@ class MainActivity : Activity() {
     private var dialog: AlertDialog? = null
     private var webView: WebView? = null
     private var variantScene: VariantScenes? = null
+    private var semanticScene: SemanticObservationScenes? = null
+    private var rawSwipeWindowScene: RawSwipeWindowScenes? = null
+    private var dynamicNavigationScene: DynamicNavigationScenes? = null
     private var scene = "navigation"
     private var seed = 0
     private var refreshCount = 0
@@ -52,6 +55,9 @@ class MainActivity : Activity() {
     private fun initialize(intent: Intent) {
         handler.removeCallbacksAndMessages(null)
         variantScene?.close(); variantScene = null
+        semanticScene?.close(); semanticScene = null
+        rawSwipeWindowScene?.close(); rawSwipeWindowScene = null
+        dynamicNavigationScene?.close(); dynamicNavigationScene = null
         dialog?.dismiss(); dialog = null
         webView?.destroy(); webView = null
         scene = intent.getStringExtra("scene")?.takeIf { it in OracleState.scenes } ?: "navigation"
@@ -82,6 +88,17 @@ class MainActivity : Activity() {
             "webview" -> web()
             "canvas" -> canvas()
             in NativeExecutorScenes.names -> NativeExecutorScenes.show(this, scene, handler)
+            in ReliabilityScenes.names -> ReliabilityScenes.show(this, scene, handler)
+            in StartupReadinessScenes.names -> StartupReadinessScenes.show(this, scene, handler)
+            in ActionReadinessScenes.names -> ActionReadinessScenes.show(this, scene, handler)
+            in LateTransitionReadinessScenes.names -> LateTransitionReadinessScenes.show(this, scene, handler)
+            in DeclaredLabelReadinessScenes.names -> DeclaredLabelReadinessScenes.show(this, scene, handler)
+            in NativeTabRefreshScenes.names -> NativeTabRefreshScenes.show(this, scene, handler)
+            in InputSettlingScenes.names -> InputSettlingScenes.show(this, scene, handler)
+            in VisualActionScenes.names -> VisualActionScenes.show(this, scene)
+            in RawSwipeWindowScenes.names -> rawSwipeWindowScene = RawSwipeWindowScenes(this, handler, scene).also { it.show() }
+            in DynamicNavigationScenes.names -> dynamicNavigationScene = DynamicNavigationScenes(this, handler, scene).also { it.show() }
+            in SemanticObservationScenes.names -> semanticScene = SemanticObservationScenes(this, handler, scene).also { it.show() }
         }
     }
 
@@ -311,6 +328,9 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         variantScene?.close()
+        semanticScene?.close()
+        rawSwipeWindowScene?.close()
+        dynamicNavigationScene?.close()
         dialog?.dismiss(); webView?.destroy()
         super.onDestroy()
     }

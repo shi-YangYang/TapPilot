@@ -1,8 +1,25 @@
+import type { SkillScope, SkillSpec, SkillOperation } from '../../server/src/skills/schema.js';
+import type { SkillValidation } from '../../server/src/skills/evaluation.js';
+export type { SkillScope, SkillSpec, SkillOperation };
 export type ConnectionMode = 'wireless' | 'usb';
-export type PageName = 'task' | 'model' | 'device';
+export type PageName = 'task' | 'model' | 'device' | 'improvement';
+export interface ManagedSkill {
+  id: string;
+  title: string;
+  state: 'draft' | 'candidate' | 'active' | 'superseded' | 'revoked' | 'rejected';
+  source: 'manual' | 'automatic';
+  spec: SkillSpec;
+  createdAt: number;
+  updatedAt: number;
+  successes: number;
+  failures: number;
+  validation?: SkillValidation;
+}
+export interface SkillInput { title: string; spec: SkillSpec }
 export interface PublicConfig {
   baseUrl: string;
   model: string;
+  vision: boolean;
   hasKey: boolean;
   adbPath: string;
   serial: string;
@@ -47,6 +64,8 @@ export interface ImprovementStatus {
   lastFailure?: { stage: 'generation' | 'evaluation' | 'adoption' | 'lifecycle'; code: string; httpStatus?: number };
 }
 export interface ClientEvent {
+  navigationSteps?: number;
+  navigationStopReason?: string;
   type: string;
   demo?: boolean;
   turn?: number;
@@ -72,6 +91,10 @@ export interface TapPilotApi {
   testModel(): Promise<Reply<{ model: string; durationMs: number }>>;
   setImprovement(value: { enabled: boolean }): Promise<Reply<ImprovementStatus>>;
   rollbackImprovement(): Promise<Reply<ImprovementStatus>>;
+  listSkills(): Promise<Reply<{ items: ManagedSkill[]; scope?: SkillScope }>>;
+  createSkill(value: SkillInput): Promise<Reply<ManagedSkill>>;
+  updateSkill(value: SkillInput & { id: string }): Promise<Reply<ManagedSkill>>;
+  deleteSkill(value: { id: string }): Promise<Reply<{ deleted: true }>>;
   devices(): Promise<Reply<UsbDevice[]>>;
   wirelessInterfaces(): Promise<Reply<LanAddress[]>>;
   wirelessStart(value: { host: string }): Promise<Reply<PairingResult>>;

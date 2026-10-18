@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.tappilot.testbed",
+  "activity": "dev.tappilot.testbed/.MainActivity",
+  "oraclePath": "files/oracle.json",
+  "readinessBudgetMs": 2500,
+  "transitionClock": "first_native_accessibility_probe",
+  "scenarios": [
+    { "id": "startup_blank", "kind": "blank_then_content", "expected": "ready", "expectedAction": "dispatched" },
+    { "id": "startup_entering", "kind": "offscreen_entry", "expected": "ready", "expectedAction": "dispatched" },
+    { "id": "startup_delayed_controls", "kind": "delayed_controls", "expected": "ready", "expectedAction": "dispatched" },
+    { "id": "startup_refreshing_collection", "kind": "continuous_collection", "expected": "ready", "expectedAction": "safe_refusal" },
+    { "id": "startup_never_ready", "kind": "permanent_blank", "expected": "settling", "expectedAction": "not_exercised" }
+  ]
+}

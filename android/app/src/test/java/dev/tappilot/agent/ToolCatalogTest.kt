@@ -28,4 +28,18 @@ class ToolCatalogTest {
         }
         rejected("scroll", JSONArray(listOf("status")))
     }
+
+    @Test fun readinessAndPostActionSelectorContractsAreTypedAndOptional() {
+        val wait = JSONObject().put("sinceRevision", 1).put("requireUsable", true)
+            .put("selector", JSONObject().put("editable", true).put("enabled", true))
+        ToolCatalog.validateRpc("wait_for_ui_change", wait)
+        val action = JSONObject().put("action", "press_key").put("arguments", JSONObject().put("key", "back"))
+            .put("waitFor", JSONObject().put("text", "合成目标")).put("waitMs", 1500)
+        ToolCatalog.validateRpc("act_and_observe", action)
+        for ((name, args) in listOf("wait_for_ui_change" to JSONObject(wait.toString()).put("requireUsable", "true"),
+            "act_and_observe" to JSONObject(action.toString()).put("waitFor", JSONObject()))) {
+            try { ToolCatalog.validateRpc(name, args); fail("Malformed readiness condition accepted") }
+            catch (error: AgentError) { assertEquals("INVALID_ARGUMENT", error.code) }
+        }
+    }
 }

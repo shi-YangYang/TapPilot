@@ -30,4 +30,37 @@
     <item name="native_input_second" type="id" />
     <item name="native_save" type="id" />
     <item name="native_cover" type="id" />
+    <item name="semantic_status" type="id" />
+    <item name="semantic_target" type="id" />
+    <item name="semantic_arm" type="id" />
+    <item name="semantic_result" type="id" />
+    <item name="semantic_input" type="id" />
+    <item name="reliability_target" type="id" />
+    <item name="reliability_input" type="id" />
+    <item name="reliability_status" type="id" />
+    <item name="startup_target" type="id" />
+    <item name="startup_loading" type="id" />
+    <item name="startup_collection" type="id" />
+    <item name="startup_probe" type="id" />
+    <item name="action_readiness_start" type="id" />
+    <item name="action_readiness_phase" type="id" />
+    <item name="action_readiness_intermediate" type="id" />
+    <item name="action_readiness_editor" type="id" />
+    <item name="action_readiness_list" type="id" />
+    <item name="input_settling_editor" type="id" />
+    <item name="input_settling_search" type="id" />
+    <item name="input_settling_close" type="id" />
+    <item name="input_settling_save" type="id" />
+    <item name="input_settling_undo" type="id" />
+    <item name="input_settling_status" type="id" />
+    <item name="input_settling_result" type="id" />
+    <item name="visual_action_native_target" type="id" />
+    <item name="visual_action_native_result" type="id" />
+    <item name="raw_swipe_window_title" type="id" />
+    <item name="raw_swipe_window_surface" type="id" />
+    <item name="launcher_icon_container" type="id" />
+    <item name="launcher_icon_label" type="id" />
+    <item name="launcher_destination" type="id" />
+    <item name="launcher_notice" type="id" />
+    <item name="launcher_notice_time" type="id" />
 </resources>

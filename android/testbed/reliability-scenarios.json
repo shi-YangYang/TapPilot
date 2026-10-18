@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.tappilot.testbed",
+  "activity": "dev.tappilot.testbed/.MainActivity",
+  "oraclePath": "files/oracle.json",
+  "baseline": "androidx.test.uiautomator:uiautomator:2.3.0",
+  "scenarios": [
+    { "id": "native_refresh", "kind": "tap", "change": "continuous", "expected": "success" },
+    { "id": "native_rebind", "kind": "tap", "change": "armed", "expected": "success" },
+    { "id": "native_reorder", "kind": "tap", "change": "armed", "expected": "success" },
+    { "id": "native_reorder_refresh", "kind": "tap", "change": "armed", "expected": "success" },
+    { "id": "native_replaced", "kind": "tap", "change": "armed", "expected": "refusal", "baselinePolicy": "original_selector" },
+    { "id": "native_ambiguous", "kind": "tap", "change": "armed", "expected": "refusal", "baselinePolicy": "unique_selector" },
+    { "id": "native_context", "kind": "tap", "change": "armed", "expected": "refusal", "baselinePolicy": "explicit_recipient_assertion" },
+    { "id": "reliability_delayed_input", "kind": "delayed_input", "expected": "success" },
+    { "id": "reliability_silent_input", "kind": "delayed_input", "expected": "success" },
+    { "id": "reliability_toggle", "kind": "toggle", "expected": "success" },
+    { "id": "reliability_noop", "kind": "noop", "expected": "unverified" },
+    { "id": "reliability_input_transform", "kind": "transformed_input", "expected": "unverified" }
+  ]
+}

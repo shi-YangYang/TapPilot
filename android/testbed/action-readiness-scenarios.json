@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.tappilot.testbed",
+  "activity": "dev.tappilot.testbed/.MainActivity",
+  "oraclePath": "files/oracle.json",
+  "readinessBudgetMs": 2500,
+  "waitMs": 350,
+  "transitionClock": "accepted_native_button_callback",
+  "scenarios": [
+    { "id": "action_multistage_editor", "expected": "ready", "kind": "editor", "minimumActionMs": 600 },
+    { "id": "action_delayed_scroll", "expected": "ready", "kind": "scroll", "minimumActionMs": 600 },
+    { "id": "action_refreshing_collection", "expected": "ready", "kind": "refreshing_collection", "minimumActionMs": 600 },
+    { "id": "action_never_ready", "expected": "settling", "kind": "permanent_change", "minimumActionMs": 2100 },
+    { "id": "action_noop", "expected": "ready", "kind": "noop", "minimumActionMs": 200, "maximumActionMs": 2000 }
+  ]
+}

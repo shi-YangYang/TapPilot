@@ -6,8 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 
 const name = process.argv[2];
-if (!['electron-smoke.cjs', 'electron-wireless-smoke.cjs', 'electron-theme-smoke.cjs', 'electron-improvement-smoke.cjs', 'electron-skills-sqlite.cjs'].includes(name)) {
-  process.stderr.write('Choose electron-smoke.cjs, electron-wireless-smoke.cjs, electron-theme-smoke.cjs, electron-improvement-smoke.cjs or electron-skills-sqlite.cjs.\n');
+if (!['electron-smoke.cjs', 'electron-wireless-smoke.cjs', 'electron-theme-smoke.cjs', 'electron-improvement-smoke.cjs', 'electron-skills-sqlite.cjs', 'electron-step-diagnostics.cjs'].includes(name)) {
+  process.stderr.write('Choose electron-smoke.cjs, electron-wireless-smoke.cjs, electron-theme-smoke.cjs, electron-improvement-smoke.cjs, electron-skills-sqlite.cjs or electron-step-diagnostics.cjs.\n');
   process.exit(2);
 }
 const packageInfo = JSON.parse(readFileSync(path.resolve(__dirname, '../package.json'), 'utf8'));

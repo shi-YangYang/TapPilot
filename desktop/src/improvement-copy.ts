@@ -3,7 +3,7 @@ import type { ImprovementStatus } from './client-types';
 const phases: Record<ImprovementStatus['phase'], string> = {
   idle: '等待新的失败记录', queued: '等待空闲时改进', generating: '正在总结改进方案',
   evaluating: '正在测试新技能', adopted: '新技能已采用', rejected: '本次方案未通过，保留现有能力',
-  paused: '已暂停', budget_exhausted: '改进额度已用完', error: '自动改进暂不可用',
+  paused: '已暂停', budget_exhausted: '本次改进已达测试上限', error: '自动改进暂不可用',
 };
 
 function failureText(failure: NonNullable<ImprovementStatus['lastFailure']>): string {

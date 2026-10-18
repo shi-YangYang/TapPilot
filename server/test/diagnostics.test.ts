@@ -44,6 +44,30 @@ test("diagnostics reject all non-whitelisted content, including nested extras an
   } finally { await f.close(); }
 });
 
+test("optional navigation diagnostics distinguish found targets from dispatch success and reject private search data", () => {
+  const navigation = { completedSteps: 3, stopReason: "max_steps" as const, targetFound: false };
+  const base = event({ actionKind: "navigate_until", outcome: "success", failureStage: "none", dispatchState: "sent",
+    acceptanceState: "accepted", effectState: "changed", errorCode: "NONE", reason: "NONE", navigation });
+  assert.equal(DiagnosticEventSchema.safeParse(base).success, true);
+  assert.equal(DiagnosticEventSchema.safeParse(event()).success, true, "existing records without navigation remain compatible");
+  assert.equal(safeDiagnosticErrorCode("NAVIGATION_EXHAUSTED"), "NAVIGATION_EXHAUSTED");
+  for (const stopReason of ["target_candidate", "already_explored", "scope_changed"] as const) {
+    assert.equal(DiagnosticEventSchema.safeParse({ ...base, navigation: { ...navigation, stopReason } }).success, true);
+  }
+  assert.equal(DiagnosticEventSchema.safeParse({ ...base, navigation: { ...navigation, stopReason: "target_found", targetFound: true } }).success, true);
+  for (const field of ["selector", "candidateNodeIds", "text", "packageName", "fingerprint", "message"]) {
+    assert.equal(DiagnosticEventSchema.safeParse({ ...base, navigation: { ...navigation, [field]: "synthetic-private" } }).success, false);
+  }
+  for (const invalid of [
+    { ...base, actionKind: "swipe" },
+    { ...base, eventType: "model_result" },
+    { ...base, navigation: { ...navigation, targetFound: true } },
+    { ...base, navigation: { ...navigation, stopReason: "target_found" } },
+    { ...base, navigation: { ...navigation, completedSteps: 5 } },
+    { ...base, navigation: { ...navigation, stopReason: "synthetic-private" } },
+  ]) assert.equal(DiagnosticEventSchema.safeParse(invalid).success, false);
+});
+
 test("records remain bounded by count and bytes, preserve order, and use private filesystem modes", async () => {
   const f = await fixture({ maxRecords: 3, maxBytes: 2048 });
   try {

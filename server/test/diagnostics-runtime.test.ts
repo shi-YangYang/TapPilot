@@ -18,8 +18,8 @@ function model(): ModelFetch {
     role: "assistant", content: `${SENTINEL}-model-output`, ...(turn === 1 ? { tool_calls: [call] } : {}),
   } }] }), { headers: { "Content-Type": "application/json" } });
 }
-async function run(execute: Parameters<typeof runAgent>[0]["execute"], onDiagnostic: NonNullable<Parameters<typeof runAgent>[0]["onDiagnostic"]>, modelFetch = model()) {
-  return runAgent({ task: `${SENTINEL}-task`, model: config, modelFetch, tools: clientTools, execute, onDiagnostic, diagnosticVersion: "0.3.19", maxTurns: 2 });
+async function run(execute: Parameters<typeof runAgent>[0]["execute"], onDiagnostic: NonNullable<Parameters<typeof runAgent>[0]["onDiagnostic"]>, modelFetch = model(), allowBatchedNavigation = false) {
+  return runAgent({ allowBatchedNavigation, task: `${SENTINEL}-task`, model: config, modelFetch, tools: clientTools, execute, onDiagnostic, diagnosticVersion: "0.3.19", maxTurns: 2 });
 }
 
 test("real runtime persists only whitelisted metadata; successful observations never certify task semantics", async () => {
@@ -127,4 +127,32 @@ test("model connection failures produce a fixed category without persisting mode
   assert.equal(failure.failureStage, "model");
   assert.equal(failure.dispatchState, "not_applicable");
   assert.equal(JSON.stringify(events).includes(SENTINEL), false);
+});
+
+test("navigation diagnostics retain search outcome independently of accepted dispatch without selectors or candidate handles", async () => {
+  for (const stopReason of ["max_steps", "scope_changed", "target_candidate", "target_found"] as const) {
+    const events: DiagnosticEvent[] = [];
+    let turn = 0;
+    const result = await run(async name => name === "get_ui_tree" ? { ok: true, result: observation(1) } : {
+      ok: true, result: { action: { accepted: true }, execution: { dispatch: "sent", acceptance: "accepted", effect: "changed", verification: "unverified" },
+        navigation: { completedSteps: 3, stopReason, targetFound: stopReason === "target_found",
+          ...(stopReason === "target_candidate" ? { candidateNodeIds: [`${SENTINEL}-candidate`] } : {}) }, observation: observation(2) },
+    }, event => { events.push(event); }, async () => {
+      turn++;
+      return new Response(JSON.stringify({ choices: [{ finish_reason: turn === 1 ? "tool_calls" : "stop", message: {
+        role: "assistant", content: turn === 1 ? null : "Synthetic navigation inspected", ...(turn === 1 ? { tool_calls: [{
+          id: "navigation-call", type: "function", function: { name: "navigate_until", arguments: JSON.stringify({ snapshotId: "test-session:1",
+            mode: "swipe", direction: "left", maxSteps: 3, stopWhen: { text: `${SENTINEL}-target` } }) },
+        }] } : {}),
+      } }] }), { headers: { "Content-Type": "application/json" } });
+    }, true);
+    assert.equal(result.status, "completed", result.error);
+    const navigation = events.find(event => event.actionKind === "navigate_until")!;
+    assert.equal(navigation.outcome, "success", "success describes the dispatch, not finding the target");
+    assert.equal(navigation.dispatchState, "sent");
+    assert.equal(navigation.acceptanceState, "accepted");
+    assert.deepEqual(navigation.navigation, { completedSteps: 3, stopReason, targetFound: stopReason === "target_found" });
+    const serialized = JSON.stringify(events);
+    for (const forbidden of [SENTINEL, "candidateNodeIds", "stopWhen", "test-session"]) assert.equal(serialized.includes(forbidden), false);
+  }
 });

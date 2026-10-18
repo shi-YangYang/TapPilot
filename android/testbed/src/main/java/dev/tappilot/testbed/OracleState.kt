@@ -12,7 +12,7 @@ import java.io.File
 
 /** Business state comes from handlers, never from accessibility labels or the agent's answer. */
 object OracleState {
-    val scenes = setOf("navigation", "search", "async_list", "ime", "overlay", "long_list", "webview", "canvas") + NativeExecutorScenes.names
+    val scenes = setOf("navigation", "search", "async_list", "ime", "overlay", "long_list", "webview", "canvas") + NativeExecutorScenes.names + SemanticObservationScenes.names + ReliabilityScenes.names + StartupReadinessScenes.names + ActionReadinessScenes.names + LateTransitionReadinessScenes.names + DeclaredLabelReadinessScenes.names + NativeTabRefreshScenes.names + InputSettlingScenes.names + VisualActionScenes.names + RawSwipeWindowScenes.names + DynamicNavigationScenes.names
     private var state = JSONObject()
     private var directory: File? = null
 

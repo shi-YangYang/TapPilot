@@ -7,6 +7,7 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
 import android.view.ViewGroup
+import android.view.Gravity
 import android.view.accessibility.AccessibilityEvent
 import android.widget.BaseAdapter
 import android.widget.Button
@@ -14,21 +15,27 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.ScrollView
 import android.widget.TextView
 
 /** Real Android views for executor regression tests. No model or production data is involved. */
 object NativeExecutorScenes {
     val names = setOf(
-        "native_refresh", "native_rebind", "native_reorder", "native_replaced", "native_ambiguous",
+        "native_refresh", "native_rebind", "native_reorder", "native_reorder_refresh", "native_replaced", "native_ambiguous",
         "native_context", "native_overlay", "native_input", "native_context_input",
         "native_form_refresh", "native_form_allowed", "native_form_recipient", "native_form_account",
         "native_form_amount", "native_form_status_role", "native_form_label_relation", "native_form_recipient_silent",
         "native_learning_form", "native_learning_recipient_silent", "native_learning_account",
-        "native_learning_amount", "native_learning_status_role", "native_learning_label_relation"
+        "native_learning_amount", "native_learning_status_role", "native_learning_label_relation",
+        "native_scroll_background", "native_scroll_background_click", "native_scroll_foreground"
     )
 
     fun show(activity: Activity, scene: String, handler: Handler) {
         require(scene in names)
+        if (scene.startsWith("native_scroll_")) {
+            showLayeredScroll(activity, scene)
+            return
+        }
         if (scene.startsWith("native_learning_")) {
             showLearningForm(activity, scene, handler)
             return
@@ -112,17 +119,16 @@ object NativeExecutorScenes {
             body.addView(list, LinearLayout.LayoutParams(-1, dp(334)))
         }
 
-        if (scene == "native_refresh") {
-            val refresh = object : Runnable {
-                override fun run() {
-                    ticks++
-                    peerLabels.values.forEach { it.text = "动态内容：$ticks" }
-                    OracleState.update("refreshCount" to ticks)
-                    handler.postDelayed(this, 80)
-                }
+        val refresh = object : Runnable {
+            override fun run() {
+                ticks++
+                peerLabels.values.forEach { it.text = "动态内容：$ticks" }
+                OracleState.update("refreshCount" to ticks)
+                handler.postDelayed(this, 80)
             }
-            handler.postDelayed(refresh, 80)
-        } else if (scene != "native_input") {
+        }
+        if (scene == "native_refresh") handler.postDelayed(refresh, 80)
+        if (scene != "native_refresh" && scene != "native_input") {
             body.addView(Button(activity).apply {
                 id = R.id.native_arm; text = "准备变化"; isAllCaps = false
                 setOnClickListener {
@@ -130,15 +136,22 @@ object NativeExecutorScenes {
                         // Leave this view unchanged, so the returned action observation captures the
                         // original target/context. Only the fixture's own timer performs the mutation.
                         OracleState.update("armed" to true)
+                        // Arm is fixture preparation outside the list, so keep its page stable
+                        // until accepted. Only the measured target action faces refresh + reorder.
+                        if (scene == "native_reorder_refresh") handler.postDelayed(refresh, 80)
                         handler.postDelayed({
                             changed = true
                             when (scene) {
                                 "native_rebind" -> {
                                     // Entirely new view objects, same business identity and context.
                                     list?.adapter = adapter
+                                    OracleState.update("replacementCount" to 1)
                                 }
-                                "native_reorder" -> { rows.reverse(); adapter.notifyDataSetChanged() }
-                                "native_replaced" -> adapter.notifyDataSetChanged()
+                                "native_reorder", "native_reorder_refresh" -> {
+                                    rows.reverse(); adapter.notifyDataSetChanged()
+                                    OracleState.update("orderChangeCount" to 1)
+                                }
+                                "native_replaced" -> { adapter.notifyDataSetChanged(); OracleState.update("replacementCount" to 1) }
                                 "native_ambiguous" -> { rows[1] = "duplicate"; adapter.notifyDataSetChanged() }
                                 "native_context", "native_context_input" -> {
                                     recipient.text = "合成会话乙"
@@ -158,6 +171,47 @@ object NativeExecutorScenes {
                 }
             }, LinearLayout.LayoutParams(-1, dp(56)))
         }
+    }
+
+    /** A floating native button over a passive scroll surface, as in onboarding
+     * and document readers. Reversing sibling drawing order must still refuse.
+     */
+    private fun showLayeredScroll(activity: Activity, scene: String) {
+        fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
+        val root = FrameLayout(activity).apply { setBackgroundColor(Color.WHITE) }
+        val content = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(activity).apply { text = "合成分层页面"; textSize = 22f }, LinearLayout.LayoutParams(-1, dp(80)))
+            addView(View(activity).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }, LinearLayout.LayoutParams(-1, dp(1600)))
+        }
+        val background = ScrollView(activity).apply {
+            id = R.id.native_list
+            isFillViewport = true
+            // A platform Button has a theme/state-dependent elevation. Make the
+            // negative scene physically frontmost, not just last in child order.
+            if (scene == "native_scroll_foreground") elevation = dp(24).toFloat()
+            addView(content)
+        }
+        val button = Button(activity).apply {
+            id = R.id.native_target; text = "继续查看"; isAllCaps = false
+            if (scene == "native_scroll_foreground") { stateListAnimator = null; elevation = 0f; translationZ = 0f }
+            setOnClickListener {
+                OracleState.click("native_target", true)
+                OracleState.update("completed" to true, "page" to "native_selected")
+            }
+        }
+        val buttonLayout = FrameLayout.LayoutParams(dp(140), dp(64), Gravity.BOTTOM or Gravity.END).apply {
+            rightMargin = dp(20); bottomMargin = dp(24)
+        }
+        if (scene == "native_scroll_foreground") {
+            root.addView(button, buttonLayout)
+            root.addView(background, FrameLayout.LayoutParams(-1, -1))
+        } else {
+            root.addView(background, FrameLayout.LayoutParams(-1, -1))
+            root.addView(button, buttonLayout)
+        }
+        activity.setContentView(root)
+        OracleState.update("page" to "native_ready")
     }
 
     /** Fixed multi-action learning fixture; the business oracle never reads an agent's answer. */

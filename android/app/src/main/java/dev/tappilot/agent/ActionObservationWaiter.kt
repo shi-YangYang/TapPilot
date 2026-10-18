@@ -11,16 +11,20 @@ internal class GestureCompletion {
     }
 }
 
-/** Event-driven post-action reads. This class cannot dispatch or repeat an action. */
+/** Bounded post-action reads, woken by events with a local reread fallback.
+ * Global event silence is neither required nor proof that an action succeeded.
+ * This class cannot dispatch or repeat an action.
+ */
 internal class ActionObservationWaiter(
     private val now: () -> Long,
     private val revision: () -> Long,
     private val checkActive: () -> Unit,
     private val waitForSignal: (observedRevision: Long, maxWaitMs: Long) -> Unit,
 ) {
-    fun <T> observeAfterAction(since: Long, waitMs: Int, deadline: Long, gesture: GestureCompletion?, gestureDeadline: Long, read: () -> T): T {
+    fun <T> observeAfterAction(since: Long, waitMs: Int, deadline: Long, gesture: GestureCompletion?, gestureDeadline: Long,
+                             usable: (T) -> Boolean = { true }, read: () -> T): T {
         if (gesture != null) awaitGesture(gesture, minOf(deadline, gestureDeadline))
-        return observe(if (gesture != null) revision() else since, minOf(deadline, now() + waitMs), read)
+        return observe(minOf(deadline, now() + waitMs), usable, read)
     }
 
     private fun awaitGesture(completion: GestureCompletion, deadline: Long) {
@@ -38,41 +42,32 @@ internal class ActionObservationWaiter(
         }
     }
 
-    private fun <T> observe(since: Long, deadline: Long, read: () -> T): T {
-        settle(since, deadline)
-        var reads = 0
+    private fun <T> observe(deadline: Long, usable: (T) -> Boolean, read: () -> T): T {
+        // Allow an accepted action to reach the app, without restarting a quiet
+        // period for every unrelated timer/animation accessibility event.
+        awaitReadTime(minOf(deadline, now() + 120))
         while (true) {
             checkActive()
-            val beforeRead = revision()
-            try { return read() } catch (error: AgentError) {
-                // A transient empty root is common while switching windows. Only reads are
-                // retried, only after a new event, and all share the original wait budget.
-                if (error.code != "NO_ACTIVE_WINDOW" || ++reads >= 3 || now() >= deadline) throw error
-                if (!awaitChange(beforeRead, deadline)) throw error
-                settle(beforeRead, deadline)
+            try {
+                val value = read()
+                checkActive()
+                if (usable(value) || now() >= deadline) return value
+            } catch (error: AgentError) {
+                // A transient root can recover without an accessibility event.
+                // Retry only observation under the same budget, never the mutation.
+                if (error.code != "NO_ACTIVE_WINDOW" || now() >= deadline) throw error
             }
+            awaitReadTime(minOf(deadline, now() + 120))
         }
     }
 
-    private fun settle(since: Long, deadline: Long) {
-        val start = now()
-        val window = ObservationSettleWindow(start, (deadline - start).coerceAtLeast(0).toInt(), since)
+    private fun awaitReadTime(readAt: Long) {
         while (true) {
             checkActive()
             val observed = revision()
-            val remaining = window.nextWaitMs(now(), observed)
+            val remaining = readAt - now()
             if (remaining <= 0) return
             waitForSignal(observed, minOf(remaining, 100L))
-        }
-    }
-
-    private fun awaitChange(since: Long, deadline: Long): Boolean {
-        while (true) {
-            checkActive()
-            if (revision() != since) return true
-            val remaining = deadline - now()
-            if (remaining <= 0) return false
-            waitForSignal(since, minOf(remaining, 100L))
         }
     }
 }
